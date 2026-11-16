@@ -8,6 +8,7 @@ import { pickFile, cropImage, makeThumb, canvasToBlob } from './image.js';
 import { PenCanvas } from './pen.js';
 import { reasonStats, conditionStats, unitStats, weeklyStats, overallRate, backupNotice } from './stats.js';
 import { exportBackup, importBackup, checkBackup } from './backup.js';
+import { renderHelp } from './help.js';
 import { h, fill, $, uid, toast, choose, UrlBag, progress } from './ui.js';
 
 // ---------- 공용 상태 ----------
@@ -75,6 +76,7 @@ const bagFor = (name) => { (bags[name] ||= new UrlBag()).clear(); return bags[na
 const screens = {
   home: { title: '오답노트', tab: 'home', render: renderHome },
   review: { title: '복습', tab: 'home', render: renderReview },
+  help: { title: '사용 설명서', tab: 'home', render: (el) => renderHelp(el, { onClose: () => go('home') }) },
   graduated: { title: '졸업 모아보기', tab: 'home', render: renderGraduated },
   add: { title: '오답 등록', tab: 'add', render: showAdd },
   list: { title: '오답 목록', tab: 'list', render: renderList },
@@ -93,6 +95,7 @@ async function route() {
   document.querySelectorAll('.screen').forEach((s) => { s.hidden = s.id !== 'screen-' + name; });
   document.querySelectorAll('#tabbar button').forEach((b) => b.classList.toggle('on', b.dataset.go === sc.tab));
   $('#title').textContent = sc.title;
+  $('#helpBtn').hidden = name !== 'home';
   if (name !== 'edit') closeEditForm();
   await sc.render($('#screen-' + name), arg && decodeURIComponent(arg));
   if (name !== 'add') window.scrollTo(0, 0);
@@ -1176,6 +1179,7 @@ async function start() {
     updateTestBar();
     registerServiceWorker();
     document.querySelectorAll('#tabbar button').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
+    $('#helpBtn').addEventListener('click', () => go('help'));
     window.addEventListener('hashchange', route);
     await route();
   } catch (err) {

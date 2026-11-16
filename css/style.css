@@ -357,3 +357,26 @@ table.log th, table.log td { padding: 10px 8px; border-bottom: 1px solid var(--l
   background: #222a3a; color: #fff; font-weight: 600;
   box-shadow: 0 4px 16px rgba(0, 0, 0, .2);
 }
+
+/* 사용 설명서 */
+#topbar { gap: 10px; }
+.help-btn {
+  min-height: 40px; padding: 0 14px;
+  border: 1.5px solid rgba(255, 255, 255, .7); border-radius: 20px;
+  background: rgba(255, 255, 255, .12); color: #fff;
+  font: inherit; font-size: 15px; font-weight: 600;
+  cursor: pointer; touch-action: manipulation;
+}
+.help-intro p { margin: 6px 0; }
+.help-sec > summary { font-size: 19px; min-height: 48px; display: flex; align-items: center; }
+.help-body { line-height: 1.7; }
+.help-body ol, .help-body ul { padding-left: 1.4em; margin: 8px 0; }
+.help-body li { margin: 6px 0; }
+.help-body li ul { margin: 4px 0; }
+.help-tip, .help-warn { margin: 12px 0 4px; padding: 12px 14px; border-radius: 12px; }
+.help-tip { background: var(--primary-weak); }
+.help-warn { background: #fff4dc; }
+.help-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 12px; font-weight: 700; color: var(--sub); }
+.help-flow span { padding: 6px 12px; border-radius: 10px; background: var(--bg); color: var(--text); }
+.help-flow span.grad { background: #e1f5e8; color: var(--ok); }
+.help-routine ul { padding-left: 1.4em; line-height: 1.8; }
