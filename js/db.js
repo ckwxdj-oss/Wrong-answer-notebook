@@ -82,6 +82,17 @@ export async function getSetting(key, fallback) {
 }
 export const setSetting = (key, value) => put('settings', { key, value });
 
+/** 모든 서랍 비우기 (백업 불러오기 전에) */
+export function clearAll() {
+  return run(STORES, 'readwrite', (s) => { STORES.forEach((n) => s[n].clear()); });
+}
+
+/** 여러 기록을 한 번에 저장: [{ store, value }] */
+export function putMany(items) {
+  const names = [...new Set(items.map((x) => x.store))];
+  return run(names, 'readwrite', (s) => { items.forEach((x) => s[x.store].put(x.value)); });
+}
+
 /** 오답 저장: 사진 추가(putImages), 안 쓰는 사진 삭제(delImageIds), 오답 기록 저장을 한 번에 */
 export function saveProblem(problem, putImages = [], delImageIds = []) {
   return run(['problems', 'images'], 'readwrite', (s) => {

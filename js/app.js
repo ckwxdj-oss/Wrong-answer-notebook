@@ -6,8 +6,9 @@ import {
 } from './schedule.js';
 import { pickFile, cropImage, makeThumb, canvasToBlob } from './image.js';
 import { PenCanvas } from './pen.js';
-import { reasonStats, conditionStats, unitStats, weeklyStats, overallRate } from './stats.js';
-import { h, fill, $, uid, toast, choose, UrlBag } from './ui.js';
+import { reasonStats, conditionStats, unitStats, weeklyStats, overallRate, backupNotice } from './stats.js';
+import { exportBackup, importBackup, checkBackup } from './backup.js';
+import { h, fill, $, uid, toast, choose, UrlBag, progress } from './ui.js';
 
 // ---------- 공용 상태 ----------
 const state = {
@@ -105,8 +106,14 @@ async function renderHome(el) {
   const late = queue.filter((p) => overdueDays(p, t) > 0).length;
   const active = problems.filter((p) => p.stage !== GRADUATED).length;
   const nextDue = problems.filter((p) => p.stage !== GRADUATED && p.dueDate > t).map((p) => p.dueDate).sort()[0];
+  const notice = backupNotice(await db.getSetting('lastBackupAt', null), problems, t);
 
   fill(el,
+    notice && h('div', { class: 'card backup-alert' },
+      h('div', { class: 'grow' },
+        h('b', null, notice.never ? '💾 아직 한 번도 백업하지 않았어요' : `💾 백업한 지 ${notice.days}일 지났어요`),
+        h('div', { class: 'hint' }, '탭이 고장 나거나 데이터가 지워져도 되살릴 수 있게 백업해 두세요.')),
+      h('button', { class: 'btn primary', onclick: async () => { if (await doExport()) renderHome(el); } }, '지금 백업하기')),
     h('div', { class: 'card hero' },
       h('div', { class: 'today' }, fmtDate(t)),
       queue.length > 0
@@ -896,8 +903,142 @@ async function renderSettings(el) {
       h('p', null, `오답 ${problems.length}개 저장됨`),
       est && h('p', { class: 'muted' }, `사용 중: ${mb(est.usage)} / 사용 가능: 약 ${mb(est.quota)}`)),
     reviewSettingsCard(el),
-    testModeCard(el),
-    h('p', { class: 'hint center' }, '백업은 4단계에서 추가돼요.'));
+    await backupCard(el),
+    installCard(),
+    testModeCard(el));
+}
+
+// ---------- 백업 ----------
+let lastExport = null; // 공유하기에 쓸 마지막 백업 파일
+
+async function doExport() {
+  const pg = progress('백업 파일 만드는 중');
+  try {
+    const { blob, counts } = await exportBackup((d, n) => pg.set(`${d} / ${n}`));
+    const name = `wrongnote-backup-${today()}${state.testMode ? '-test' : ''}.jsonl`; // 영어 이름: 어느 기기에서도 이름이 깨지지 않게
+    lastExport = new File([blob], name, { type: 'application/jsonl' });
+    const a = h('a', { href: URL.createObjectURL(lastExport), download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    await db.setSetting('lastBackupAt', today());
+    toast(`백업 파일을 저장했어요 (오답 ${counts.problems}개, ${(blob.size / 1024 / 1024).toFixed(1)}MB)`);
+    return true;
+  } catch (err) {
+    console.error(err);
+    alert('백업을 만들지 못했어요: ' + err.message);
+    return false;
+  } finally {
+    pg.close();
+  }
+}
+
+async function shareExport() {
+  if (!lastExport) { if (!(await doExport())) return; }
+  try {
+    await navigator.share({ files: [lastExport], title: lastExport.name });
+  } catch (err) {
+    if (err.name !== 'AbortError') alert('공유하지 못했어요: ' + err.message);
+  }
+}
+
+function pickAnyFile() {
+  return new Promise((resolve) => {
+    const inp = h('input', { type: 'file' });
+    inp.addEventListener('change', () => resolve(inp.files[0] || null));
+    inp.addEventListener('cancel', () => resolve(null));
+    inp.click();
+  });
+}
+
+async function doImport() {
+  const file = await pickAnyFile();
+  if (!file) return false;
+  let header;
+  const pg = progress('백업 파일 확인 중');
+  try {
+    header = await checkBackup(file);
+  } catch (err) {
+    alert('불러올 수 없어요: ' + err.message);
+    return false;
+  } finally {
+    pg.close();
+  }
+  const current = (await db.getAll('problems')).length;
+  const when = new Date(header.exportedAt).toLocaleString('ko-KR');
+  if (!confirm(`⚠️ 현재 데이터를 덮어씁니다.\n\n지금 있는 오답 ${current}개가 지워지고,\n백업 파일(${when})의 오답 ${header.counts.problems}개로 바뀌어요.\n\n계속할까요?`)) return false;
+  const pg2 = progress('백업 불러오는 중');
+  try {
+    await importBackup(file, (d, n) => pg2.set(`${d} / ${n}`));
+    await db.setSetting('lastBackupAt', today());
+    await afterDataSwitch();
+    toast(`불러왔어요! 오답 ${header.counts.problems}개`);
+    return true;
+  } catch (err) {
+    console.error(err);
+    alert('불러오는 중에 문제가 생겼어요: ' + err.message + '\n다른 백업 파일로 다시 시도해 주세요.');
+    await afterDataSwitch();
+    return false;
+  } finally {
+    pg2.close();
+  }
+}
+
+async function backupCard(el) {
+  const last = await db.getSetting('lastBackupAt', null);
+  const canShare = !!(navigator.canShare && navigator.canShare({ files: [new File(['x'], 'x.jsonl', { type: 'application/jsonl' })] }));
+  return h('div', { class: 'card' },
+    h('h2', null, '💾 백업'),
+    h('p', null, last ? `마지막 백업: ${fmtDate(last)}` : '아직 백업한 적이 없어요.'),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', onclick: async () => { if (await doExport()) renderSettings(el); } }, '⬇️ 백업 파일 내려받기'),
+      canShare && h('button', { class: 'btn', onclick: shareExport }, '📤 공유로 보내기 (드라이브 등)'),
+      h('button', { class: 'btn danger', onclick: async () => { if (await doImport()) go('home'); } }, '📥 백업 불러오기')),
+    h('p', { class: 'hint' }, '백업 파일 하나에 사진까지 모두 들어 있어요. 구글 드라이브나 컴퓨터에도 옮겨 두면 탭을 잃어버려도 안전해요.'),
+    state.testMode && h('p', { class: 'hint' }, '⚠️ 지금은 테스트 모드라서 테스트 데이터를 백업/불러오기 해요.'));
+}
+
+// ---------- 앱 설치 (PWA) ----------
+let installEvent = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; });
+
+function installCard() {
+  const standalone = matchMedia('(display-mode: standalone)').matches;
+  return h('div', { class: 'card' },
+    h('h2', null, '📲 홈 화면에 추가'),
+    standalone
+      ? h('p', null, '✓ 앱으로 설치되어 있어요. 인터넷이 없어도 쓸 수 있어요.')
+      : [h('p', null, '홈 화면에 추가하면 앱처럼 열리고, 인터넷이 없어도 쓸 수 있어요.'),
+        installEvent
+          ? h('button', { class: 'btn primary', onclick: async () => { installEvent.prompt(); await installEvent.userChoice; installEvent = null; } }, '홈 화면에 추가하기')
+          : h('p', { class: 'hint' }, '크롬 오른쪽 위 ⋮ 메뉴 → "홈 화면에 추가" 또는 "앱 설치"를 눌러요.')]);
+}
+
+let updating = false;
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('./sw.js').then((reg) => {
+    const offer = (worker) => {
+      const bar = h('div', { class: 'update-bar' }, '새 버전이 준비됐어요.',
+        h('button', { class: 'btn small', onclick: () => { updating = true; worker.postMessage('SKIP_WAITING'); } }, '지금 업데이트'));
+      document.body.append(bar);
+    };
+    if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing;
+      w?.addEventListener('statechange', () => {
+        if (w.state === 'installed' && navigator.serviceWorker.controller) offer(w);
+      });
+    });
+  }).catch((err) => console.warn('서비스 워커 등록 실패', err));
+  // "지금 업데이트"를 눌렀을 때만 새로고침 (처음 설치될 때는 새로고침하지 않음)
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!updating) return;
+    updating = false;
+    location.reload();
+  });
 }
 
 function reviewSettingsCard(el) {
@@ -1033,6 +1174,7 @@ async function start() {
     }
     await loadMeta();
     updateTestBar();
+    registerServiceWorker();
     document.querySelectorAll('#tabbar button').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
     window.addEventListener('hashchange', route);
     await route();

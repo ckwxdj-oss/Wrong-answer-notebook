@@ -1,5 +1,5 @@
 // 통계 계산 (화면 코드와 분리된 순수 함수들)
-import { addDays, GRADUATED, RESULTS } from './schedule.js';
+import { addDays, diffDays, GRADUATED, RESULTS } from './schedule.js';
 
 /**
  * 틀린 이유별 개수와 비율
@@ -88,4 +88,21 @@ export function overallRate(problems) {
     if (r.result === 'correct') c++;
   }));
   return { reviews: n, correct: c, rate: n ? c / n : null };
+}
+
+/**
+ * 백업 알림: 마지막 백업 후 7일 이상 지나면 { days, never: false }
+ * 한 번도 백업 안 했으면, 첫 오답 등록 후 7일 이상 지났을 때 { days, never: true }
+ * 알릴 필요 없으면 null
+ */
+export function backupNotice(lastBackup, problems, today, limit = 7) {
+  if (!problems.length) return null;
+  if (lastBackup) {
+    const days = diffDays(lastBackup, today);
+    return days >= limit ? { days, never: false } : null;
+  }
+  const first = problems.map((p) => p.createdDate).filter(Boolean).sort()[0];
+  if (!first) return null;
+  const days = diffDays(first, today);
+  return days >= limit ? { days, never: true } : null;
 }

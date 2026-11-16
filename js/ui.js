@@ -69,3 +69,15 @@ export class UrlBag {
   url(blob) { const u = URL.createObjectURL(blob); this.urls.push(u); return u; }
   clear() { this.urls.forEach((u) => URL.revokeObjectURL(u)); this.urls = []; }
 }
+
+/** 진행 상황 창 (백업 만들기/불러오기 중) */
+export function progress(title) {
+  const text = h('p', null, '준비 중…');
+  const overlay = h('div', { class: 'modal-bg' }, h('div', { class: 'modal center' }, h('h2', null, title), text,
+    h('p', { class: 'hint' }, '끝날 때까지 앱을 닫지 말아 주세요.')));
+  document.body.append(overlay);
+  return {
+    set(msg) { text.textContent = msg; },
+    close() { overlay.remove(); },
+  };
+}

@@ -1,7 +1,7 @@
 // 통계 계산 자동 테스트. 실행: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { reasonStats, conditionStats, unitStats, weeklyStats, overallRate } from '../js/stats.js';
+import { reasonStats, conditionStats, unitStats, weeklyStats, overallRate, backupNotice } from '../js/stats.js';
 
 const reasons = [
   { id: 'calc', name: '계산 실수' },
@@ -67,4 +67,13 @@ test('최근 4주 등록 수와 복습 정답률', () => {
 test('전체 정답률', () => {
   const r = overallRate([{ reviews: [{ result: 'correct' }, { result: 'vague' }] }, { reviews: [{ result: 'correct' }, { result: 'restart' }] }]);
   assert.deepEqual(r, { reviews: 3, correct: 2, rate: 2 / 3 });
+});
+
+test('백업 알림: 마지막 백업 후 7일이 지나면', () => {
+  const ps = [{ createdDate: '2026-11-01' }];
+  assert.equal(backupNotice('2026-11-10', ps, '2026-11-16'), null, '6일째는 알림 없음');
+  assert.deepEqual(backupNotice('2026-11-10', ps, '2026-11-17'), { days: 7, never: false });
+  assert.deepEqual(backupNotice(null, ps, '2026-11-09'), { days: 8, never: true }, '백업한 적 없음');
+  assert.equal(backupNotice(null, ps, '2026-11-05'), null);
+  assert.equal(backupNotice(null, [], '2026-12-31'), null, '오답이 없으면 알림 없음');
 });
