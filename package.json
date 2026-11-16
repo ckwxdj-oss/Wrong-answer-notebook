@@ -1,0 +1,8 @@
+{
+  "name": "wrong-answer-notebook",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

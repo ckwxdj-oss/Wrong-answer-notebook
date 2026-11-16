@@ -44,6 +44,17 @@ export async function use(name = MAIN_DB) {
 
 export function currentDbName() { return currentName; }
 
+/** 데이터베이스를 통째로 지우기 (테스트 데이터 초기화 등) */
+export async function resetDb(name) {
+  if (current && currentName === name) { current.close(); current = null; currentName = null; }
+  await new Promise((resolve, reject) => {
+    const r = indexedDB.deleteDatabase(name);
+    r.onsuccess = resolve;
+    r.onblocked = resolve;
+    r.onerror = () => reject(r.error);
+  });
+}
+
 /** 저장 작업 하나를 실행하고 끝날 때까지 기다림 */
 function run(storeNames, mode, body) {
   return new Promise((resolve, reject) => {

@@ -34,7 +34,11 @@ body {
   padding: 0 20px;
   background: var(--primary); color: #fff;
 }
-#topbar h1 { margin: 0; font-size: 22px; }
+#topbar h1 { margin: 0; font-size: 22px; flex: 1; }
+body.testing #topbar { background: #c77700; }
+#testbar { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+#testbar .btn { min-height: 44px; background: #fff; color: #8a5200; border-color: #fff; }
+.test-card { border: 3px solid #f0b545; }
 
 main { max-width: 1000px; margin: 0 auto; padding: 16px; }
 
@@ -271,3 +275,29 @@ table.log th, table.log td { padding: 10px 8px; border-bottom: 1px solid var(--l
 .choice { text-align: left; padding: 12px 20px; height: auto; }
 .choice-desc { font-size: 15px; font-weight: 400; color: var(--sub); }
 .fatal { background: var(--danger); color: #fff; padding: 16px; }
+
+/* 홈 · 복습 */
+.hero { text-align: center; }
+.big-num { font-size: 72px; font-weight: 800; line-height: 1.1; color: var(--primary); }
+.big-num small { font-size: 28px; margin-left: 4px; }
+.hero-sub { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+.late-text { color: var(--danger); font-weight: 700; }
+.done-msg { font-size: 22px; font-weight: 700; padding: 18px 0; }
+.hero .btn.big { margin: 16px 0 0; }
+.badge.late { background: #fde3e3; color: var(--danger); }
+.badge.due { background: var(--primary-weak); color: var(--primary); }
+.review-top {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 18px; font-weight: 700; margin-bottom: 12px;
+}
+.review-top .badge.late { font-size: 17px; padding: 6px 14px; }
+.grade-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.btn.grade { min-height: 96px; font-size: 22px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.btn.grade small { font-size: 15px; font-weight: 500; opacity: .8; }
+.btn.grade.ok { border-color: #9bd8b3; background: #eaf8f0; color: #157a42; }
+.btn.grade.meh { border-color: #f2d08a; background: #fff7e3; color: #8a5a00; }
+.btn.grade.bad { border-color: #f1b3b3; background: #fdeeee; color: var(--danger); }
+.big-emoji { font-size: 64px; }
+.stepper { display: flex; align-items: center; gap: 18px; }
+.stepper .btn { width: 64px; font-size: 28px; padding: 0; }
+.stepper b { font-size: 26px; min-width: 80px; text-align: center; }

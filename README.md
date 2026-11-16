@@ -11,3 +11,9 @@
 python3 -m http.server 8000
 ```
 브라우저에서 http://localhost:8000 접속
+
+## 자동 테스트 (복습 일정 계산)
+Node.js가 설치된 컴퓨터에서:
+```
+npm test
+```

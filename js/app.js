@@ -1,7 +1,10 @@
 // 앱의 화면과 동작
 import * as db from './db.js';
-import { toDateStr, newSchedule, stageLabel, GRADUATED } from './schedule.js';
-import { pickFile, cropImage, makeThumb } from './image.js';
+import {
+  toDateStr, addDays, newSchedule, stageLabel, GRADUATED,
+  nextSchedule, applyReview, reactivate, dailyQueue, overdueDays, INTERVALS,
+} from './schedule.js';
+import { pickFile, cropImage, makeThumb, canvasToBlob } from './image.js';
 import { PenCanvas } from './pen.js';
 import { h, fill, $, uid, toast, choose, UrlBag } from './ui.js';
 
@@ -10,6 +13,9 @@ const state = {
   subjects: [],
   reasons: [],
   sel: { subjectId: null, units: {} }, // 마지막으로 고른 과목/단원
+  dailyMax: 10,
+  testMode: false,
+  testToday: null,
 };
 
 const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0);
@@ -18,10 +24,11 @@ async function loadMeta() {
   state.subjects = (await db.getAll('subjects')).sort(byOrder);
   state.reasons = (await db.getAll('reasons')).sort(byOrder);
   state.sel = await db.getSetting('lastSelection', { subjectId: null, units: {} });
+  state.dailyMax = await db.getSetting('dailyMax', 10);
 }
 
-/** 오늘 날짜 (2단계에서 테스트 모드 날짜로 바뀔 수 있게 한 곳에서 관리) */
-function today() { return toDateStr(new Date()); }
+/** 오늘 날짜. 테스트 모드에서는 내가 정한 날짜 */
+function today() { return state.testMode ? state.testToday : toDateStr(new Date()); }
 
 const subjectById = (id) => state.subjects.find((s) => s.id === id);
 const reasonById = (id) => state.reasons.find((r) => r.id === id);
@@ -48,6 +55,16 @@ function statusBadge(p) {
     ? h('span', { class: 'badge grad' }, '🎓 졸업')
     : h('span', { class: 'badge' }, `복습 중 · ${stageLabel(p.stage)}`);
 }
+/** 다음 복습일 표시: 지났으면 빨간색 "○일 지남" */
+function dueBadge(p) {
+  if (p.stage === GRADUATED || !p.dueDate) return null;
+  const t = today();
+  const od = overdueDays(p, t);
+  if (od > 0) return h('span', { class: 'badge late' }, `${od}일 지남`);
+  if (p.dueDate === t) return h('span', { class: 'badge due' }, '오늘 복습');
+  const [, m, d] = p.dueDate.split('-').map(Number);
+  return h('span', { class: 'muted' }, `${m}/${d} 복습`);
+}
 
 // ---------- 화면 이동 ----------
 const bags = {}; // 화면별 사진 주소 모음
@@ -55,6 +72,7 @@ const bagFor = (name) => { (bags[name] ||= new UrlBag()).clear(); return bags[na
 
 const screens = {
   home: { title: '오답노트', tab: 'home', render: renderHome },
+  review: { title: '복습', tab: 'home', render: renderReview },
   add: { title: '오답 등록', tab: 'add', render: showAdd },
   list: { title: '오답 목록', tab: 'list', render: renderList },
   detail: { title: '오답 상세', tab: 'list', render: renderDetail },
@@ -80,17 +98,134 @@ async function route() {
 // ---------- 홈 ----------
 async function renderHome(el) {
   const problems = await db.getAll('problems');
+  const t = today();
+  const { queue, deferred, doneToday } = dailyQueue(problems, t, state.dailyMax);
+  const late = queue.filter((p) => overdueDays(p, t) > 0).length;
   const active = problems.filter((p) => p.stage !== GRADUATED).length;
-  fill(el, 
+  const nextDue = problems.filter((p) => p.stage !== GRADUATED && p.dueDate > t).map((p) => p.dueDate).sort()[0];
+
+  fill(el,
+    h('div', { class: 'card hero' },
+      h('div', { class: 'today' }, fmtDate(t)),
+      queue.length > 0
+        ? [h('div', { class: 'big-num' }, queue.length, h('small', null, '개')),
+          h('div', { class: 'hero-sub' }, '오늘 복습할 문제'),
+          late > 0 && h('div', { class: 'late-text' }, `그중 ${late}개는 복습 날짜가 지났어요`)]
+        : h('div', { class: 'done-msg' },
+          doneToday > 0 ? `오늘 복습 끝! 🎉 (${doneToday}개 완료)` : '오늘은 복습할 문제가 없어요 😊',
+          nextDue && h('div', { class: 'hint' }, `다음 복습: ${fmtDate(nextDue)}`)),
+      deferred.length > 0 && h('p', { class: 'hint' }, `하루 최대 ${state.dailyMax}개라서 ${deferred.length}개는 다음 날로 넘어가요.`),
+      h('button', { class: 'btn primary big', disabled: queue.length === 0, onclick: () => go('review') }, '▶ 복습 시작')),
+    h('button', { class: 'btn big', onclick: () => go('add') }, '➕ 오답 등록'),
     h('div', { class: 'card' },
-      h('div', { class: 'today' }, fmtDate(today())),
       h('div', { class: 'stat-row' },
         h('div', { class: 'stat' }, h('b', null, problems.length), h('span', null, '전체 오답')),
         h('div', { class: 'stat' }, h('b', null, active), h('span', null, '복습 중')),
-        h('div', { class: 'stat' }, h('b', null, problems.length - active), h('span', null, '졸업')))),
-    h('button', { class: 'btn primary big', onclick: () => go('add') }, '➕ 오답 등록'),
-    h('button', { class: 'btn big', onclick: () => go('list') }, '📋 오답 목록'),
-    h('p', { class: 'hint center' }, '복습 기능은 2단계에서 추가돼요.'));
+        h('div', { class: 'stat' }, h('b', null, problems.length - active), h('span', null, '졸업')))));
+}
+
+// ---------- 복습 ----------
+let session = null; // 이번 복습에서 맞음/애매함/틀림 개수
+
+async function renderReview(el) {
+  const bag = bagFor('review');
+  const t = today();
+  const problems = await db.getAll('problems');
+  const { queue, deferred } = dailyQueue(problems, t, state.dailyMax);
+  if (!session || session.date !== t) session = { date: t, correct: 0, vague: 0, wrong: 0 };
+
+  if (!queue.length) {
+    const n = session.correct + session.vague + session.wrong;
+    fill(el,
+      h('div', { class: 'card center' },
+        h('div', { class: 'big-emoji' }, '🎉'),
+        h('h2', null, n ? '오늘 복습 끝!' : '지금은 복습할 문제가 없어요'),
+        n > 0 && h('p', null, `⭕ 맞음 ${session.correct} · 🔺 애매함 ${session.vague} · ❌ 틀림 ${session.wrong}`),
+        deferred.length > 0 && h('p', { class: 'hint' }, `남은 ${deferred.length}개는 다음 날 복습에 나와요.`)),
+      h('button', { class: 'btn primary big', onclick: () => go('home') }, '🏠 홈으로'));
+    return;
+  }
+
+  const p = queue[0];
+  const od = overdueDays(p, t);
+  const probImg = await imageEl(p.images?.problem, bag);
+  const answerArea = h('div');
+  let busy = false;
+
+  async function grade(result) {
+    if (busy) return;
+    busy = true;
+    const updated = applyReview(p, result, t);
+    await db.put('problems', updated);
+    session[result]++;
+    toast(updated.stage === GRADUATED ? '🎓 졸업했어요!' : `다음 복습: ${fmtDate(updated.dueDate)}`);
+    await renderReview(el);
+    window.scrollTo(0, 0);
+  }
+  const gradeBtn = (result, cls, label) => {
+    const next = nextSchedule(p.stage, result, t);
+    const what = next.stage === GRADUATED ? '졸업' : `${INTERVALS[next.stage]}일 뒤`;
+    return h('button', { class: `btn grade ${cls}`, onclick: () => grade(result) }, h('div', null, label), h('small', null, what));
+  };
+
+  const revealBtn = h('button', {
+    class: 'btn primary big',
+    onclick: async () => {
+      revealBtn.remove();
+      fill(answerArea,
+        await solutionCards(p, bag),
+        h('div', { class: 'card' },
+          h('h2', null, '어땠나요?'),
+          h('div', { class: 'grade-row' },
+            gradeBtn('correct', 'ok', '⭕ 맞음'),
+            gradeBtn('vague', 'meh', '🔺 애매함'),
+            gradeBtn('wrong', 'bad', '❌ 틀림'))));
+      answerArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+  }, '👀 풀이 보기');
+
+  fill(el,
+    h('div', { class: 'review-top' },
+      h('span', null, `남은 문제 ${queue.length}개`),
+      od > 0 && h('span', { class: 'badge late' }, `${od}일 지남`)),
+    h('div', { class: 'card' },
+      h('div', { class: 'item-title big' }, p.starred && '⭐ ', problemLabel(p)),
+      h('div', { class: 'meta' }, statusBadge(p)),
+      probImg,
+      h('p', { class: 'hint' }, '종이에 다시 풀어본 다음 "풀이 보기"를 눌러요.')),
+    revealBtn,
+    answerArea);
+}
+
+async function imageEl(imgId, bag) {
+  if (!imgId) return null;
+  const row = await db.get('images', imgId);
+  return row ? h('img', { class: 'photo-preview', src: bag.url(row.blob), alt: '' }) : null;
+}
+
+/** 저장해 둔 풀이 / 답과 근거 / 틀린 이유·메모 카드들 (복습·상세 화면에서 같이 사용) */
+async function solutionCards(p, bag) {
+  const [drawImg, photoImg] = await Promise.all([imageEl(p.images?.drawing, bag), imageEl(p.images?.solutionPhoto, bag)]);
+  const subject = subjectById(p.subjectId);
+  const src = p.source || {};
+  const srcText = [src.book, src.page && `${src.page}쪽`, src.num && `${src.num}번`].filter(Boolean).join(' · ');
+  const details = Object.entries(p.reasonDetails || {}).map(([rid, text]) =>
+    h('div', { class: 'detail-note' }, `${reasonById(rid)?.name || '기타'}: ${text}`));
+  return [
+    (subject?.type === 'reason' || p.myAnswer || p.answerBasis) && h('div', { class: 'card' },
+      h('h2', null, '답과 근거'),
+      h('h3', null, '내가 고른 답과 이유'), h('p', { class: 'pre' }, p.myAnswer || '-'),
+      h('h3', null, '정답 근거'), h('p', { class: 'pre' }, p.answerBasis || '-')),
+    (drawImg || photoImg) && h('div', { class: 'card' },
+      h('h2', null, '풀이'),
+      drawImg && [h('h3', null, '✍️ 펜 풀이'), drawImg],
+      photoImg && [h('h3', null, '📄 풀이 사진'), photoImg]),
+    h('div', { class: 'card' },
+      h('h2', null, '틀린 이유'),
+      h('div', null, reasonTags(p)), details,
+      srcText && [h('h3', null, '출처'), h('p', null, srcText)],
+      p.memo && [h('h3', null, '메모'), h('p', null, p.memo)]),
+  ];
 }
 
 // ---------- 오답 등록 / 수정 폼 ----------
@@ -412,7 +547,7 @@ async function renderList(el) {
         h('div', { class: 'item-body' },
           h('div', { class: 'item-title' }, p.starred && '⭐ ', problemLabel(p)),
           h('div', null, reasonTags(p)),
-          h('div', { class: 'item-foot' }, statusBadge(p), h('span', { class: 'muted' }, p.createdDate))))))
+          h('div', { class: 'item-foot' }, statusBadge(p), dueBadge(p))))))
       : h('div', { class: 'empty' }, all.length ? '조건에 맞는 오답이 없어요.' : '아직 등록한 오답이 없어요.', h('br'),
         !all.length && h('button', { class: 'btn primary', onclick: () => go('add') }, '➕ 첫 오답 등록하기')));
 }
@@ -422,38 +557,25 @@ async function renderDetail(el, id) {
   const bag = bagFor('detail');
   const p = await db.get('problems', id);
   if (!p) { fill(el, h('p', null, '오답을 찾을 수 없어요.')); return; }
-  const img = async (imgId) => {
-    if (!imgId) return null;
-    const row = await db.get('images', imgId);
-    return row ? h('img', { class: 'photo-preview', src: bag.url(row.blob), alt: '' }) : null;
-  };
-  const [probImg, drawImg, photoImg] = await Promise.all([img(p.images?.problem), img(p.images?.drawing), img(p.images?.solutionPhoto)]);
-  const subject = subjectById(p.subjectId);
-  const src = p.source || {};
-  const srcText = [src.book, src.page && `${src.page}쪽`, src.num && `${src.num}번`].filter(Boolean).join(' · ');
-  const details = Object.entries(p.reasonDetails || {}).map(([rid, text]) =>
-    h('div', { class: 'detail-note' }, `${reasonById(rid)?.name || '기타'}: ${text}`));
+  const probImg = await imageEl(p.images?.problem, bag);
 
-  fill(el, 
+  async function restart() {
+    const updated = reactivate(p, today());
+    await db.put('problems', updated);
+    toast(`다시 복습에 넣었어요. ${fmtDate(updated.dueDate)}에 나와요`);
+    renderDetail(el, id);
+  }
+
+  fill(el,
     h('div', { class: 'card' },
       h('div', { class: 'item-title big' }, p.starred && '⭐ ', problemLabel(p)),
-      h('div', { class: 'meta' }, statusBadge(p),
+      h('div', { class: 'meta' }, statusBadge(p), dueBadge(p),
         p.stage !== GRADUATED && h('span', null, `다음 복습: ${fmtDate(p.dueDate)}`),
+        p.graduatedDate && h('span', null, `졸업: ${fmtDate(p.graduatedDate)}`),
         h('span', { class: 'muted' }, `등록: ${fmtDate(p.createdDate)}`)),
-      probImg),
-    (subject?.type === 'reason' || p.myAnswer || p.answerBasis) && h('div', { class: 'card' },
-      h('h2', null, '답과 근거'),
-      h('h3', null, '내가 고른 답과 이유'), h('p', { class: 'pre' }, p.myAnswer || '-'),
-      h('h3', null, '정답 근거'), h('p', { class: 'pre' }, p.answerBasis || '-')),
-    (drawImg || photoImg) && h('div', { class: 'card' },
-      h('h2', null, '풀이'),
-      drawImg && [h('h3', null, '✍️ 펜 풀이'), drawImg],
-      photoImg && [h('h3', null, '📄 풀이 사진'), photoImg]),
-    h('div', { class: 'card' },
-      h('h2', null, '틀린 이유'),
-      h('div', null, reasonTags(p)), details,
-      srcText && [h('h3', null, '출처'), h('p', null, srcText)],
-      p.memo && [h('h3', null, '메모'), h('p', null, p.memo)]),
+      probImg,
+      p.stage === GRADUATED && h('button', { class: 'btn primary', style: { marginTop: '12px' }, onclick: restart }, '🔁 다시 복습에 넣기')),
+    await solutionCards(p, bag),
     h('div', { class: 'card' },
       h('h2', null, '복습 기록'),
       p.reviews?.length
@@ -474,7 +596,7 @@ async function renderDetail(el, id) {
       h('button', { class: 'btn', onclick: () => history.back() }, '← 뒤로')));
 }
 
-const RESULT_LABEL = { correct: '⭕ 맞음', vague: '🔺 애매함', wrong: '❌ 틀림' };
+const RESULT_LABEL = { correct: '⭕ 맞음', vague: '🔺 애매함', wrong: '❌ 틀림', restart: '🔁 다시 복습에 넣음' };
 
 // ---------- 통계 (3단계) ----------
 function renderStats(el) {
@@ -600,7 +722,130 @@ async function renderSettings(el) {
       h('h2', null, '💾 저장 공간'),
       h('p', null, `오답 ${problems.length}개 저장됨`),
       est && h('p', { class: 'muted' }, `사용 중: ${mb(est.usage)} / 사용 가능: 약 ${mb(est.quota)}`)),
-    h('p', { class: 'hint center' }, '하루 복습 개수, 백업, 테스트 모드는 다음 단계에서 추가돼요.'));
+    reviewSettingsCard(el),
+    testModeCard(el),
+    h('p', { class: 'hint center' }, '백업은 4단계에서 추가돼요.'));
+}
+
+function reviewSettingsCard(el) {
+  const setMax = async (n) => {
+    state.dailyMax = Math.min(100, Math.max(1, n));
+    await db.setSetting('dailyMax', state.dailyMax);
+    renderSettings(el);
+  };
+  return h('div', { class: 'card' },
+    h('h2', null, '📅 하루 복습 최대 개수'),
+    h('div', { class: 'stepper' },
+      h('button', { class: 'btn', onclick: () => setMax(state.dailyMax - 1), 'aria-label': '줄이기' }, '−'),
+      h('b', null, `${state.dailyMax}개`),
+      h('button', { class: 'btn', onclick: () => setMax(state.dailyMax + 1), 'aria-label': '늘리기' }, '+')),
+    h('p', { class: 'hint' }, '이보다 많으면 오래 밀린 문제부터 보여주고, 나머지는 다음 날로 넘겨요.'));
+}
+
+// ---------- 테스트 모드 ----------
+async function setTestMode(on) {
+  await db.use(db.MAIN_DB);
+  await db.setSetting('testMode', on);
+  if (on) {
+    await db.use(db.TEST_DB);
+    state.testToday = await db.getSetting('testToday', toDateStr(new Date()));
+  }
+  state.testMode = on;
+  await afterDataSwitch();
+}
+
+/** 데이터베이스가 바뀌었을 때(테스트 모드 켜기/끄기, 불러오기) 화면 상태 초기화 */
+async function afterDataSwitch() {
+  if (addForm) { addForm.destroy(); addForm = null; }
+  fill($('#screen-add'));
+  session = null;
+  await loadMeta();
+  updateTestBar();
+}
+
+async function setTestToday(d) {
+  if (!d) return;
+  state.testToday = d;
+  await db.setSetting('testToday', d);
+  updateTestBar();
+}
+
+async function nextTestDay() {
+  await setTestToday(addDays(state.testToday, 1));
+  toast(`오늘은 ${fmtDate(state.testToday)} (테스트)`);
+  route();
+}
+
+function updateTestBar() {
+  document.body.classList.toggle('testing', state.testMode);
+  const bar = $('#testbar');
+  bar.hidden = !state.testMode;
+  if (!state.testMode) return;
+  const [, m, d] = state.testToday.split('-').map(Number);
+  fill(bar,
+    h('span', null, `🧪 테스트 ${m}/${d}`),
+    h('button', { class: 'btn small', onclick: nextTestDay }, '다음 날 ▶'));
+}
+
+/** 테스트용 예시 오답 만들기 (오늘 날짜로 등록) */
+async function makeSamples(n) {
+  const subject = state.subjects[0];
+  for (let i = 0; i < n; i++) {
+    const c = document.createElement('canvas');
+    c.width = 1200; c.height = 600;
+    const x = c.getContext('2d');
+    x.fillStyle = `hsl(${Math.floor(Math.random() * 360)} 60% 95%)`;
+    x.fillRect(0, 0, c.width, c.height);
+    x.fillStyle = '#222';
+    x.font = 'bold 72px sans-serif';
+    const k = Math.floor(Math.random() * 900) + 100;
+    x.fillText(`예시 문제 ${k}`, 60, 160);
+    x.font = '56px sans-serif';
+    x.fillText(`${k % 9 + 2}x + ${k % 7 + 1} = ${k % 50}`, 60, 300);
+    const blob = await canvasToBlob(c);
+    const imgId = uid();
+    const unit = subject?.units[Math.floor(Math.random() * (subject.units.length || 1))];
+    const reason = state.reasons[Math.floor(Math.random() * state.reasons.length)];
+    const d = today();
+    await db.saveProblem({
+      id: uid(), createdDate: d, createdAt: Date.now() + i, ...newSchedule(d), reviews: [],
+      subjectId: subject?.id, unitId: unit?.id ?? null,
+      reasonIds: reason ? [reason.id] : [], reasonDetails: reason?.needsDetail ? { [reason.id]: 'x>0' } : {},
+      images: { problem: imgId, solutionPhoto: null, drawing: null },
+      thumb: await makeThumb(blob), myAnswer: '', answerBasis: '',
+      source: { book: '예시 교재', page: String(k % 200), num: String(k % 30) }, memo: '테스트용 예시', starred: false,
+    }, [{ id: imgId, blob }]);
+  }
+}
+
+function testModeCard(el) {
+  const rerender = () => renderSettings(el);
+  if (!state.testMode) {
+    return h('div', { class: 'card' },
+      h('h2', null, '🧪 테스트 모드'),
+      h('p', null, '날짜를 마음대로 바꿔서 복습이 잘 나오는지 시험해 볼 수 있어요.'),
+      h('p', { class: 'hint' }, '테스트 모드의 데이터는 진짜 오답과 따로 저장돼요. 끄면 진짜 데이터로 돌아와요.'),
+      h('button', { class: 'btn primary', onclick: async () => { await setTestMode(true); toast('테스트 모드를 켰어요'); rerender(); } }, '테스트 모드 켜기'));
+  }
+  const dateInput = h('input', { type: 'date', value: state.testToday, onchange: async (e) => { await setTestToday(e.target.value); toast(`오늘은 ${fmtDate(state.testToday)} (테스트)`); } });
+  return h('div', { class: 'card test-card' },
+    h('h2', null, '🧪 테스트 모드 (켜짐)'),
+    h('label', { class: 'field' }, h('span', null, '테스트 날짜'), dateInput),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn primary', onclick: async () => { await setTestToday(addDays(state.testToday, 1)); toast(`오늘은 ${fmtDate(state.testToday)} (테스트)`); rerender(); } }, '다음 날로 ▶'),
+      h('button', { class: 'btn', onclick: async () => { await setTestToday(toDateStr(new Date())); rerender(); } }, '진짜 오늘로'),
+      h('button', { class: 'btn', onclick: async () => { await makeSamples(5); toast('예시 오답 5개를 만들었어요'); rerender(); } }, '예시 오답 5개 만들기')),
+    h('div', { class: 'btn-row' },
+      h('button', { class: 'btn danger', onclick: async () => {
+        if (!confirm('테스트 데이터를 모두 지울까요? (진짜 데이터는 그대로예요)')) return;
+        await db.resetDb(db.TEST_DB);
+        await db.use(db.TEST_DB);
+        await db.setSetting('testToday', state.testToday);
+        await afterDataSwitch();
+        toast('테스트 데이터를 지웠어요');
+        rerender();
+      } }, '테스트 데이터 모두 지우기'),
+      h('button', { class: 'btn', onclick: async () => { await setTestMode(false); toast('테스트 모드를 껐어요. 진짜 데이터로 돌아왔어요'); rerender(); } }, '테스트 모드 끄기')));
 }
 
 // ---------- 시작 ----------
@@ -608,7 +853,13 @@ async function start() {
   try {
     await db.use(db.MAIN_DB);
     navigator.storage?.persist?.(); // 브라우저가 데이터를 함부로 지우지 않도록 요청
+    if (await db.getSetting('testMode', false)) {
+      await db.use(db.TEST_DB);
+      state.testMode = true;
+      state.testToday = await db.getSetting('testToday', toDateStr(new Date()));
+    }
     await loadMeta();
+    updateTestBar();
     document.querySelectorAll('#tabbar button').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
     window.addEventListener('hashchange', route);
     await route();
