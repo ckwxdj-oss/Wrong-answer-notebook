@@ -301,3 +301,48 @@ table.log th, table.log td { padding: 10px 8px; border-bottom: 1px solid var(--l
 .stepper { display: flex; align-items: center; gap: 18px; }
 .stepper .btn { width: 64px; font-size: 28px; padding: 0; }
 .stepper b { font-size: 26px; min-width: 80px; text-align: center; }
+
+/* 통계 */
+.filter-chips { margin-bottom: 16px; }
+.stat-row { flex-wrap: wrap; }
+.stat { min-width: 120px; }
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(7em, 13em) 1fr auto;
+  align-items: center; gap: 12px;
+  padding: 7px 0;
+}
+.bar-label { font-weight: 600; font-size: 16px; }
+.bar-value { font-size: 15px; color: var(--text); white-space: nowrap; min-width: 5em; text-align: right; }
+.bar-track { height: 22px; background: #eef1f6; border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--primary); border-radius: 0 4px 4px 0; }
+.stack { display: flex; gap: 2px; height: 100%; }
+.seg { height: 100%; flex-basis: 0; }
+.seg:last-child { border-radius: 0 4px 4px 0; }
+.seg.active, .sw.active { background: var(--primary); }
+.seg.grad, .sw.grad { background: var(--ok); }
+.legend { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--sub); margin-bottom: 8px; }
+.sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; }
+.sw.grad { margin-left: 12px; }
+.cond-list { display: flex; flex-wrap: wrap; gap: 10px; }
+.cond {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 8px 14px; border-radius: 12px;
+  background: #fff7e6; border: 2px solid #f4dfb4;
+  font-size: 17px; font-weight: 600;
+}
+.cond.many { border-color: var(--warn); }
+.cond b { font-size: 14px; color: #8a5a00; }
+
+/* 졸업 모아보기 */
+.grad-head { margin-bottom: 12px; color: var(--sub); }
+.grad-sec > summary { font-size: 19px; }
+.grad-item { border-top: 2px solid var(--line); padding: 16px 0; }
+.grad-item:first-child { border-top: 0; }
+.grad-item .item-title { margin-bottom: 10px; }
+.grad-item .card { box-shadow: none; border: 2px solid var(--line); margin-top: 12px; }
+
+@media (max-width: 600px) {
+  .bar-row { grid-template-columns: 1fr auto; }
+  .bar-row .bar-track { grid-column: 1 / -1; grid-row: 2; }
+}

@@ -6,6 +6,7 @@ import {
 } from './schedule.js';
 import { pickFile, cropImage, makeThumb, canvasToBlob } from './image.js';
 import { PenCanvas } from './pen.js';
+import { reasonStats, conditionStats, unitStats, weeklyStats, overallRate } from './stats.js';
 import { h, fill, $, uid, toast, choose, UrlBag } from './ui.js';
 
 // ---------- 공용 상태 ----------
@@ -73,6 +74,7 @@ const bagFor = (name) => { (bags[name] ||= new UrlBag()).clear(); return bags[na
 const screens = {
   home: { title: '오답노트', tab: 'home', render: renderHome },
   review: { title: '복습', tab: 'home', render: renderReview },
+  graduated: { title: '졸업 모아보기', tab: 'home', render: renderGraduated },
   add: { title: '오답 등록', tab: 'add', render: showAdd },
   list: { title: '오답 목록', tab: 'list', render: renderList },
   detail: { title: '오답 상세', tab: 'list', render: renderDetail },
@@ -121,7 +123,8 @@ async function renderHome(el) {
       h('div', { class: 'stat-row' },
         h('div', { class: 'stat' }, h('b', null, problems.length), h('span', null, '전체 오답')),
         h('div', { class: 'stat' }, h('b', null, active), h('span', null, '복습 중')),
-        h('div', { class: 'stat' }, h('b', null, problems.length - active), h('span', null, '졸업')))));
+        h('div', { class: 'stat' }, h('b', null, problems.length - active), h('span', null, '졸업'))),
+      h('button', { class: 'btn', style: { width: '100%', marginTop: '12px' }, onclick: () => go('graduated') }, '🎓 졸업 모아보기')));
 }
 
 // ---------- 복습 ----------
@@ -598,9 +601,179 @@ async function renderDetail(el, id) {
 
 const RESULT_LABEL = { correct: '⭕ 맞음', vague: '🔺 애매함', wrong: '❌ 틀림', restart: '🔁 다시 복습에 넣음' };
 
-// ---------- 통계 (3단계) ----------
-function renderStats(el) {
-  fill(el, h('div', { class: 'empty' }, '통계 화면은 3단계에서 만들어요.'));
+// ---------- 과목 고르기 칩 (통계, 졸업 모아보기에서 사용) ----------
+function subjectFilter(current, onPick) {
+  if (state.subjects.length < 2) return null;
+  return h('div', { class: 'chips filter-chips' },
+    [['', '전체'], ...state.subjects.map((s) => [s.id, s.name])].map(([id, name]) =>
+      h('button', { class: 'chip' + (id === current ? ' on' : ''), onclick: () => onPick(id) }, name)));
+}
+const md = (str) => { const [, m, d] = str.split('-').map(Number); return `${m}/${d}`; };
+const pct = (x) => Math.round(x * 100) + '%';
+
+// ---------- 통계 ----------
+let statsSubject = '';
+
+function barRow(label, value, max, text) {
+  return h('div', { class: 'bar-row' },
+    h('div', { class: 'bar-label' }, label),
+    h('div', { class: 'bar-track' }, value > 0 && h('div', { class: 'bar-fill', style: { width: (value / max) * 100 + '%' } })),
+    h('div', { class: 'bar-value' }, text));
+}
+
+function stackRow(label, row, max) {
+  return h('div', { class: 'bar-row' },
+    h('div', { class: 'bar-label' }, label),
+    h('div', { class: 'bar-track' }, row.total > 0 && h('div', { class: 'stack', style: { width: (row.total / max) * 100 + '%' } },
+      row.active > 0 && h('div', { class: 'seg active', style: { flexGrow: row.active } }),
+      row.grad > 0 && h('div', { class: 'seg grad', style: { flexGrow: row.grad } }))),
+    h('div', { class: 'bar-value' }, row.total ? `${row.total}개 (복습 ${row.active} · 졸업 ${row.grad})` : '0개'));
+}
+
+async function renderStats(el) {
+  if (statsSubject && !subjectById(statsSubject)) statsSubject = '';
+  const all = await db.getAll('problems');
+  const ps = statsSubject ? all.filter((p) => p.subjectId === statsSubject) : all;
+  const chips = subjectFilter(statsSubject, (id) => { statsSubject = id; renderStats(el); });
+  if (!ps.length) { fill(el, chips, h('div', { class: 'empty' }, '아직 통계를 낼 오답이 없어요.')); return; }
+
+  const active = ps.filter((p) => p.stage !== GRADUATED).length;
+  const ov = overallRate(ps);
+  const rs = reasonStats(ps, state.reasons);
+  const maxR = Math.max(1, ...rs.map((r) => r.count));
+  const conds = conditionStats(ps, state.reasons);
+  const weeks = weeklyStats(ps, today());
+  const maxW = Math.max(1, ...weeks.map((w) => w.registered));
+  const weekLabel = (w, i) => (i === 3 ? `최근 7일` : `${md(w.start)}~${md(w.end)}`);
+  const subjects = statsSubject ? [subjectById(statsSubject)] : state.subjects;
+
+  const unitCards = subjects.map((s) => {
+    const rows = unitStats(ps, s);
+    if (!rows.some((r) => r.total) && !statsSubject) return null;
+    const max = Math.max(1, ...rows.map((r) => r.total));
+    let lastGroup = null;
+    return h('div', { class: 'card' },
+      h('h2', null, `📚 단원별 오답 수${subjects.length > 1 ? ` · ${s.name}` : ''}`),
+      h('div', { class: 'legend' },
+        h('span', { class: 'sw active' }), '복습 중', h('span', { class: 'sw grad' }), '졸업'),
+      rows.map((r) => {
+        const head = r.group !== lastGroup && r.group ? h('div', { class: 'group-label' }, r.group) : null;
+        lastGroup = r.group;
+        return [head, stackRow(r.name, r, max)];
+      }));
+  });
+
+  fill(el,
+    chips,
+    h('div', { class: 'card' },
+      h('div', { class: 'stat-row' },
+        h('div', { class: 'stat' }, h('b', null, ps.length), h('span', null, '전체 오답')),
+        h('div', { class: 'stat' }, h('b', null, active), h('span', null, '복습 중')),
+        h('div', { class: 'stat' }, h('b', null, ps.length - active), h('span', null, '졸업')),
+        h('div', { class: 'stat' }, h('b', null, ov.rate == null ? '-' : pct(ov.rate)), h('span', null, '복습 정답률')))),
+    h('div', { class: 'card' },
+      h('h2', null, '🤔 틀린 이유'),
+      rs.map((r) => barRow(r.name, r.count, maxR, `${r.count}개 · ${pct(r.ratio)}`)),
+      h('p', { class: 'hint' }, '한 문제에 이유를 여러 개 고를 수 있어서, 비율은 전체 이유 표시 수 기준이에요.')),
+    conds.map((c) => h('div', { class: 'card' },
+      h('h2', null, `🔎 "${c.name}"에 적은 내용`),
+      c.items.length
+        ? h('div', { class: 'cond-list' }, c.items.map((it) =>
+          h('span', { class: 'cond' + (it.count > 1 ? ' many' : '') }, it.text, h('b', null, `${it.count}번`))))
+        : h('p', { class: 'muted' }, '아직 적은 내용이 없어요.'),
+      c.items.length > 0 && h('p', { class: 'hint' }, '자주 놓치는 것부터 보여줘요. 시험 볼 때 이것부터 확인하세요!'))),
+    unitCards,
+    h('div', { class: 'card' },
+      h('h2', null, '🗓 최근 4주 등록 수'),
+      weeks.map((w, i) => barRow(weekLabel(w, i), w.registered, maxW, `${w.registered}개`))),
+    h('div', { class: 'card' },
+      h('h2', null, '✅ 최근 4주 복습 정답률'),
+      weeks.map((w, i) => barRow(weekLabel(w, i), w.rate ?? 0, 1,
+        w.rate == null ? '복습 없음' : `${pct(w.rate)} (${w.correct}/${w.reviews})`)),
+      h('p', { class: 'hint' }, '정답률 = 맞음 ÷ 전체 평가 수 (애매함은 정답에 넣지 않아요)')));
+}
+
+// ---------- 졸업 모아보기 ----------
+let gradSubject = '';
+
+async function renderGraduated(el) {
+  if (gradSubject && !subjectById(gradSubject)) gradSubject = '';
+  const bag = bagFor('graduated');
+  const all = (await db.getAll('problems')).filter((p) => p.stage === GRADUATED);
+  const ps = gradSubject ? all.filter((p) => p.subjectId === gradSubject) : all;
+  const chips = subjectFilter(gradSubject, (id) => { gradSubject = id; renderGraduated(el); });
+  if (!ps.length) {
+    fill(el, chips, h('div', { class: 'empty' }, '아직 졸업한 오답이 없어요.', h('br'), '30일 단계에서 맞히면 졸업해요 🎓'));
+    return;
+  }
+
+  // 과목 → 단원 순서로 묶기
+  const sections = [];
+  const subjects = gradSubject ? [subjectById(gradSubject)] : state.subjects;
+  subjects.forEach((s) => {
+    const mine = ps.filter((p) => p.subjectId === s.id);
+    const unitIds = [...s.units.map((u) => u.id), null];
+    unitIds.forEach((uid_) => {
+      const items = mine.filter((p) => (uid_ === null ? !s.units.some((u) => u.id === p.unitId) : p.unitId === uid_));
+      if (items.length) sections.push({ title: `${subjects.length > 1 ? s.name + ' · ' : ''}${unitName(s, uid_)}`, items });
+    });
+  });
+  const orphans = ps.filter((p) => !subjectById(p.subjectId));
+  if (orphans.length) sections.push({ title: '(삭제된 과목)', items: orphans });
+
+  const secEls = sections.map((sec) => {
+    const body = h('div', { class: 'grad-body' });
+    let loaded = false;
+    const d = h('details', { class: 'card grad-sec' },
+      h('summary', null, sec.title, ' ', h('span', { class: 'tag' }, `${sec.items.length}개`)),
+      body);
+    d.addEventListener('toggle', async () => {
+      if (!d.open || loaded) return;
+      loaded = true;
+      fill(body, await Promise.all(sec.items.map((p) => gradItem(p, bag))));
+    });
+    return d;
+  });
+
+  fill(el,
+    chips,
+    h('div', { class: 'row grad-head' },
+      h('div', { class: 'grow' }, `졸업한 오답 ${ps.length}개 · 단원을 눌러서 펼쳐요`),
+      h('button', { class: 'btn small', onclick: () => secEls.forEach((d) => { d.open = true; }) }, '모두 펼치기'),
+      h('button', { class: 'btn small', onclick: () => secEls.forEach((d) => { d.open = false; }) }, '모두 접기')),
+    secEls);
+}
+
+async function gradItem(p, bag) {
+  const img = await imageEl(p.images?.problem, bag);
+  const sol = h('div');
+  const solBtn = h('button', {
+    class: 'btn',
+    onclick: async () => {
+      if (sol.childElementCount) { fill(sol); solBtn.textContent = '👀 풀이 보기'; return; }
+      fill(sol, await solutionCards(p, bag));
+      solBtn.textContent = '풀이 접기';
+    },
+  }, '👀 풀이 보기');
+  const wrap = h('div', { class: 'grad-item' },
+    h('div', { class: 'item-title' }, p.starred && '⭐ ', reasonTags(p),
+      p.graduatedDate && h('span', { class: 'muted' }, ` 졸업 ${fmtDate(p.graduatedDate)}`)),
+    img,
+    h('div', { class: 'btn-row' },
+      solBtn,
+      h('button', {
+        class: 'btn primary',
+        onclick: async () => {
+          if (!confirm('다시 복습에 넣을까요? 3일 단계부터 다시 시작해요.')) return;
+          const updated = reactivate(p, today());
+          await db.put('problems', updated);
+          toast(`다시 복습에 넣었어요. ${fmtDate(updated.dueDate)}에 나와요`);
+          wrap.remove();
+        },
+      }, '🔁 다시 복습에 넣기'),
+      h('button', { class: 'btn', onclick: () => go('detail/' + p.id) }, '상세')),
+    sol);
+  return wrap;
 }
 
 // ---------- 설정 ----------
