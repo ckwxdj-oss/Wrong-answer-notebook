@@ -405,3 +405,11 @@ table.log th, table.log td { padding: 10px 8px; border-bottom: 1px solid var(--l
 .course-note { margin: 12px 0 4px; padding: 12px 14px; border-radius: 12px; background: var(--primary-weak); font-weight: 600; }
 .badge.short { background: #efe6fb; color: #6a3fb0; }
 table.log td .muted { font-size: 14px; }
+
+/* 복습 때 푼 풀이 */
+.rv-pen { margin-top: 12px; }
+.rv-finish { margin-top: 16px; }
+.rv-finish .btn.big { margin-bottom: 10px; }
+.rv-sols > summary { font-size: 19px; }
+.rv-sol { border-top: 2px solid var(--line); padding-top: 4px; margin-top: 12px; }
+.rv-sol:first-child { border-top: 0; margin-top: 0; }

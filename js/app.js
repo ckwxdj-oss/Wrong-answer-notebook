@@ -124,6 +124,7 @@ async function route() {
   $('#title').textContent = sc.title;
   $('#helpBtn').hidden = name !== 'home';
   if (name !== 'edit') closeEditForm();
+  if (name !== 'review' && reviewEditor) { reviewEditor.destroy(); reviewEditor = null; }
   await sc.render($('#screen-' + name), arg && decodeURIComponent(arg));
   if (name !== 'add') window.scrollTo(0, 0);
 }
@@ -167,7 +168,64 @@ async function renderHome(el) {
 // ---------- 복습 ----------
 let session = null; // 이번 복습에서 맞음/애매함/틀림 개수
 
+let reviewEditor = null; // 복습 화면에서 쓰는 "이번 풀이" 입력칸
+
+/** 복습할 때 푼 풀이 넣는 칸: 종이 풀이 사진(여러 장) + S펜 */
+function createReviewSolutionEditor() {
+  const urls = new UrlBag();
+  let pen = null;
+  const photos = []; // { blob }
+  const photoBox = h('div');
+  const penBox = h('div');
+
+  async function add(camera) {
+    if (camera) {
+      const file = await pickFile(true);
+      if (!file) return;
+      const blob = await cropImage(file);
+      if (blob) photos.push({ blob });
+    } else {
+      const files = await pickFile(false, true);
+      if (!files?.length) return;
+      for (const file of files) photos.push({ blob: await compress(file) });
+    }
+    renderPhotos();
+  }
+  function renderPhotos() {
+    fill(photoBox,
+      photos.length > 0 && h('div', { class: 'sol-photos' }, photos.map((ph, i) => h('div', { class: 'sol-photo' },
+        h('div', { class: 'sol-num' }, i + 1),
+        h('img', { src: urls.url(ph.blob), alt: `풀이 사진 ${i + 1}` }),
+        h('div', { class: 'sol-tools' },
+          h('button', { class: 'btn small', onclick: async () => { const b = await cropImage(ph.blob); if (b) { ph.blob = b; renderPhotos(); } } }, '✂️'),
+          h('button', { class: 'btn small danger', 'aria-label': '빼기', onclick: () => { photos.splice(photos.indexOf(ph), 1); renderPhotos(); } }, '✕'))))),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn', onclick: () => add(true) }, photos.length ? '📷 한 장 더 찍기' : '📷 종이 풀이 찍기'),
+        h('button', { class: 'btn', onclick: () => add(false) }, '🖼 갤러리 (여러 장 가능)')));
+  }
+  fill(penBox, h('button', { class: 'btn', onclick: () => { const host = h('div'); pen = new PenCanvas(host); fill(penBox, host); } }, '✍️ S펜으로 쓰기'));
+  renderPhotos();
+
+  return {
+    el: h('div', null, photoBox, h('div', { class: 'rv-pen' }, penBox)),
+    hasContent: () => photos.length > 0 || !!pen?.hasInk(),
+    /** 저장할 사진들과, 복습 기록에 붙일 { photos: [id], drawing: id } */
+    async collect() {
+      const put = [];
+      const images = { photos: [], drawing: null };
+      for (const ph of photos) { const id = uid(); put.push({ id, blob: ph.blob }); images.photos.push(id); }
+      if (pen?.hasInk()) { const id = uid(); put.push({ id, blob: await pen.toBlob() }); images.drawing = id; }
+      return { put, images };
+    },
+    destroy() { urls.clear(); pen?.destroy(); },
+  };
+}
+
+const reviewImageIds = (r) => (r.images ? [r.images.drawing, ...(r.images.photos || [])].filter(Boolean) : []);
+const hasReviewSolution = (r) => reviewImageIds(r).length > 0;
+
 async function renderReview(el) {
+  if (reviewEditor) { reviewEditor.destroy(); reviewEditor = null; }
   const bag = bagFor('review');
   const t = today();
   const problems = await db.getAll('problems');
@@ -201,12 +259,42 @@ async function renderReview(el) {
       extra = r.extra;
     }
     busy = true;
-    const updated = applyReview(p, result, t, extra);
-    await db.put('problems', updated);
-    session[result]++;
-    toast(updated.stage === GRADUATED ? '🎓 졸업했어요!' : `다음 복습: ${fmtDate(updated.dueDate)}`);
-    await renderReview(el);
-    window.scrollTo(0, 0);
+    showSolutionStep(result, extra);
+  }
+
+  /** 평가를 고른 다음: 이번에 푼 풀이 넣기 (선택) */
+  function showSolutionStep(result, extra) {
+    const editor = createReviewSolutionEditor();
+    reviewEditor = editor;
+    let saving = false;
+    const finish = async (withSolution) => {
+      if (saving) return;
+      let put = [];
+      let ex = extra;
+      if (withSolution) {
+        if (!editor.hasContent()) { alert('넣은 풀이가 없어요. 사진을 찍거나 S펜으로 쓰고 눌러 주세요.\n풀이를 안 넣으려면 "풀이 없이 다음"을 눌러요.'); return; }
+        saving = true;
+        const c = await editor.collect();
+        put = c.put;
+        ex = { ...extra, images: c.images };
+      }
+      saving = true;
+      const updated = applyReview(p, result, t, ex);
+      await db.saveProblem(updated, put, []);
+      session[result]++;
+      toast(updated.stage === GRADUATED ? '🎓 졸업했어요!' : `다음 복습: ${fmtDate(updated.dueDate)}`);
+      await renderReview(el);
+      window.scrollTo(0, 0);
+    };
+    fill(gradeCard,
+      h('h2', null, `${RESULT_LABEL[result]} — 이번에 푼 풀이 넣기 (선택)`),
+      h('p', { class: 'hint' }, '종이에 푼 풀이를 찍거나 S펜으로 써 두면, 다음에 "풀이 보기"의 "복습 때 푼 풀이"에서 볼 수 있어요.'),
+      editor.el,
+      h('div', { class: 'rv-finish' },
+        h('button', { class: 'btn primary big', onclick: () => finish(true) }, '💾 풀이 저장하고 다음'),
+        h('button', { class: 'btn big', onclick: () => finish(false) }, '풀이 없이 다음 →'),
+        h('button', { class: 'btn', onclick: () => { editor.destroy(); reviewEditor = null; busy = false; renderGrades(); } }, '← 평가 다시 고르기')));
+    gradeCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   const gradeBtn = (result, cls, label) => {
     const next = nextSchedule({ track: p.track, stage: p.stage }, result, t);
@@ -214,18 +302,20 @@ async function renderReview(el) {
     return h('button', { class: `btn grade ${cls}`, onclick: () => grade(result) }, h('div', null, label), h('small', null, what));
   };
 
+  const gradeCard = h('div', { class: 'card' });
+  const renderGrades = () => fill(gradeCard,
+    h('h2', null, '어땠나요?'),
+    h('div', { class: 'grade-row' },
+      gradeBtn('correct', 'ok', '⭕ 맞음'),
+      gradeBtn('vague', 'meh', '🔺 애매함'),
+      gradeBtn('wrong', 'bad', '❌ 틀림')));
+
   const revealBtn = h('button', {
     class: 'btn primary big',
     onclick: async () => {
       revealBtn.remove();
-      fill(answerArea,
-        await solutionCards(p, bag),
-        h('div', { class: 'card' },
-          h('h2', null, '어땠나요?'),
-          h('div', { class: 'grade-row' },
-            gradeBtn('correct', 'ok', '⭕ 맞음'),
-            gradeBtn('vague', 'meh', '🔺 애매함'),
-            gradeBtn('wrong', 'bad', '❌ 틀림'))));
+      renderGrades();
+      fill(answerArea, await solutionCards(p, bag), gradeCard);
       answerArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
     },
   }, '👀 풀이 보기');
@@ -249,6 +339,30 @@ async function imageEl(imgId, bag) {
   return row ? h('img', { class: 'photo-preview', src: bag.url(row.blob), alt: '' }) : null;
 }
 
+/** 복습 때 푼 풀이 모음 (접혀 있다가 누르면 최근 것부터 펼쳐짐) */
+function reviewSolutionsCard(p, bag) {
+  const list = (p.reviews || []).filter(hasReviewSolution);
+  if (!list.length) return null;
+  const body = h('div');
+  let loaded = false;
+  const d = h('details', { class: 'card rv-sols' },
+    h('summary', null, `📝 복습 때 푼 풀이 (${list.length}번)`),
+    body);
+  d.addEventListener('toggle', async () => {
+    if (!d.open || loaded) return;
+    loaded = true;
+    const blocks = [];
+    for (const r of [...list].reverse()) {
+      const imgs = (await Promise.all(reviewImageIds(r).map((id) => imageEl(id, bag)))).filter(Boolean);
+      blocks.push(h('div', { class: 'rv-sol' },
+        h('h3', null, `${fmtDate(r.date)} · ${RESULT_LABEL[r.result] || r.result}`),
+        h('div', { class: 'photo-stack' }, imgs)));
+    }
+    fill(body, blocks);
+  });
+  return d;
+}
+
 /** 저장해 둔 풀이 / 답과 근거 / 틀린 이유·메모 카드들 (복습·상세 화면에서 같이 사용) */
 async function solutionCards(p, bag) {
   const [drawImg, ...photoImgs] = await Promise.all([imageEl(p.images?.drawing, bag), ...(p.images?.solutionPhotos || []).map((id) => imageEl(id, bag))]);
@@ -267,6 +381,7 @@ async function solutionCards(p, bag) {
       h('h2', null, '풀이'),
       drawImg && [h('h3', null, '✍️ 펜 풀이'), drawImg],
       photos.length > 0 && [h('h3', null, `📄 풀이 사진${photos.length > 1 ? ` (${photos.length}장)` : ''}`), h('div', { class: 'photo-stack' }, photos)]),
+    reviewSolutionsCard(p, bag),
     h('div', { class: 'card' },
       h('h2', null, '틀린 이유'),
       h('div', null, reasonTags(p)), details,
@@ -735,9 +850,9 @@ async function renderDetail(el, id) {
   if (!p) { fill(el, h('p', null, '오답을 찾을 수 없어요.')); return; }
   const probImg = await imageEl(p.images?.problem, bag);
 
-  async function saveHistory(reviews) {
+  async function saveHistory(reviews, delImgs = []) {
     const updated = { ...p, ...replaySchedule(p.createdDate, p.baseTrack, reviews) };
-    await db.put('problems', updated);
+    await db.saveProblem(updated, [], delImgs);
     toast(updated.stage === GRADUATED ? '기록을 바꿨어요. 졸업 상태예요 🎓' : `기록을 바꿨어요. 다음 복습: ${fmtDate(updated.dueDate)}`);
     renderDetail(el, id);
   }
@@ -766,13 +881,13 @@ async function renderDetail(el, id) {
           h('tr', null, h('th', null, '날짜'), h('th', null, '평가'), h('th', null, '그때 단계'), h('th', null, '')),
           p.reviews.map((r, i) => h('tr', null,
             h('td', null, r.date),
-            h('td', null, RESULT_LABEL[r.result] || r.result,
+            h('td', null, RESULT_LABEL[r.result] || r.result, hasReviewSolution(r) && h('span', { class: 'clip', title: '풀이 있음' }, ' 📎'),
               r.result === 'wrong' && r.reasonIds?.length > 0 && h('div', { class: 'muted' },
                 r.reasonIds.map((id) => reasonById(id)?.name).filter(Boolean).join(', '), r.track && ` → ${TRACK_LABEL[r.track]}`)),
             h('td', null, r.stage === GRADUATED ? '졸업' : `${TRACK_LABEL[r.fromTrack] || ''} ${stageLabel(r.stage, r.fromTrack)}`),
             h('td', null, h('button', { class: 'btn small danger', 'aria-label': '기록 지우기', onclick: async () => {
-              if (!confirm(`${r.date} 기록을 지울까요? 복습 일정이 다시 계산돼요.`)) return;
-              await saveHistory(p.reviews.filter((_, j) => j !== i));
+              if (!confirm(`${r.date} 기록을 지울까요? 복습 일정이 다시 계산돼요.` + (hasReviewSolution(r) ? '\n이때 넣은 풀이도 같이 지워져요.' : ''))) return;
+              await saveHistory(p.reviews.filter((_, j) => j !== i), reviewImageIds(r));
             } }, '🗑')))))
         : h('p', { class: 'muted' }, '아직 복습 기록이 없어요.'),
       h('button', { class: 'btn', style: { marginTop: '12px' }, onclick: async () => {

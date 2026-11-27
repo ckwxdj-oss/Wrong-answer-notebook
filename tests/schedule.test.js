@@ -176,3 +176,11 @@ test('알림용 계산(sw.js)이 앱의 계산과 같음', async () => {
   }
   assert.ok(listeners.periodicsync && listeners.notificationclick, '알림 이벤트가 연결됨');
 });
+
+test('복습 기록에 붙인 풀이(사진)는 기록을 더 넣거나 다시 계산해도 그대로 남음', () => {
+  let p = make('2026-11-10');
+  p = applyReview(p, 'correct', '2026-11-14', { images: { photos: ['a', 'b'], drawing: 'c' } });
+  p = applyReview(p, 'vague', '2026-11-11'); // 더 이른 날짜를 나중에 넣음 → 다시 계산
+  const r = p.reviews.find((x) => x.date === '2026-11-14');
+  assert.deepEqual(r.images, { photos: ['a', 'b'], drawing: 'c' });
+});

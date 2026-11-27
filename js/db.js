@@ -124,6 +124,10 @@ export function saveProblem(problem, putImages = [], delImageIds = []) {
 export function deleteProblem(problem) {
   return run(['problems', 'images'], 'readwrite', (s) => {
     Object.values(problem.images || {}).flat().forEach((id) => id && s.images.delete(id));
+    // 복습 때 넣은 풀이 사진도 같이
+    (problem.reviews || []).forEach((r) => {
+      if (r.images) [r.images.drawing, ...(r.images.photos || [])].forEach((id) => id && s.images.delete(id));
+    });
     s.problems.delete(problem.id);
   });
 }
