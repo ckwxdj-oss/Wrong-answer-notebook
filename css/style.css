@@ -413,3 +413,16 @@ table.log td .muted { font-size: 14px; }
 .rv-sols > summary { font-size: 19px; }
 .rv-sol { border-top: 2px solid var(--line); padding-top: 4px; margin-top: 12px; }
 .rv-sol:first-child { border-top: 0; margin-top: 0; }
+
+/* 지난 복습 기록 창 안의 풀이 칸 */
+.modal.wide { width: min(900px, 100%); }
+.dialog-sol { margin: 16px 0; padding-top: 14px; border-top: 2px solid var(--line); }
+.modal .pen-toolbar { top: 0; }
+/* 창 아래 확인/취소 버튼은 항상 보이게 */
+.modal-actions {
+  position: sticky; bottom: -22px; z-index: 6;
+  display: grid; grid-template-columns: 1fr 2fr; gap: 10px;
+  margin: 16px -22px -22px; padding: 12px 22px 22px;
+  background: #fff; border-top: 1px solid var(--line);
+}
+.modal-actions .btn.big { margin: 0; }

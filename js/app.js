@@ -440,7 +440,13 @@ function reviewDialog({ title, withDate = false, minDate, maxDate, result: fixed
     const picked = new Set();
     const dateInput = withDate ? h('input', { type: 'date', value: maxDate, min: minDate, max: maxDate }) : null;
     const body = h('div');
-    const close = (v) => { overlay.remove(); resolve(v); };
+    // 지난 복습 기록을 넣을 때는 "그때 푼 풀이"도 같이 (사진 여러 장 + S펜)
+    const editor = withDate ? createReviewSolutionEditor() : null;
+    const editorBox = editor && h('div', { class: 'field dialog-sol' },
+      h('span', null, '그때 푼 풀이 (선택)'),
+      h('p', { class: 'hint' }, '종이에 푼 풀이를 찍거나 S펜으로 써요. 없으면 그냥 확인을 눌러요.'),
+      editor.el);
+    const close = (v) => { editor?.destroy(); overlay.remove(); resolve(v); };
     function render() {
       const course = trackFor([...picked], lightIds());
       fill(body,
@@ -457,9 +463,12 @@ function reviewDialog({ title, withDate = false, minDate, maxDate, result: fixed
           picked.size > 0 && h('p', { class: 'course-note' }, course === 'short'
             ? '가벼운 실수만 골랐어요 → 짧은 복습(1→3→7일)으로 1일 뒤부터 다시 시작해요.'
             : '보통 복습(1→3→7→14→28일)으로 1일 뒤부터 다시 시작해요.'),
-        ]);
+        ],
+        editorBox);
     }
-    const ok = () => {
+    let saving = false;
+    const ok = async () => {
+      if (saving) return;
       const date = withDate ? dateInput.value : null;
       if (withDate && (!date || date < minDate || date > maxDate)) {
         alert(`날짜는 ${fmtDate(minDate)}부터 ${fmtDate(maxDate)} 사이로 골라 주세요.`);
@@ -468,12 +477,20 @@ function reviewDialog({ title, withDate = false, minDate, maxDate, result: fixed
       if (!result) { alert('결과를 골라 주세요.'); return; }
       if (result === 'wrong' && !picked.size) { alert('틀린 이유를 하나 이상 골라 주세요.'); return; }
       const extra = result === 'wrong' ? { reasonIds: [...picked], track: trackFor([...picked], lightIds()) } : {};
-      close({ date, result, extra });
+      let put = []; // 저장할 풀이 사진 (아직 저장 전)
+      if (editor?.hasContent()) {
+        saving = true;
+        const c = await editor.collect();
+        put = c.put;
+        extra.images = c.images;
+      }
+      close({ date, result, extra, put });
     };
     const overlay = h('div', { class: 'modal-bg' }, h('div', { class: 'modal wide' },
       h('h2', null, title), body,
-      h('button', { class: 'btn primary big', onclick: ok }, '확인'),
-      h('button', { class: 'btn big', onclick: () => close(null) }, '취소')));
+      h('div', { class: 'modal-actions' },
+        h('button', { class: 'btn big', onclick: () => close(null) }, '취소'),
+        h('button', { class: 'btn primary big', onclick: ok }, '확인'))));
     render();
     document.body.append(overlay);
   });
@@ -680,7 +697,8 @@ function createProblemForm(existing, { onSaved, onCancel }) {
     fill(pastBox,
       sorted.length
         ? h('ul', { class: 'past-list' }, sorted.map((r) => h('li', { class: 'row' },
-          h('span', { class: 'grow' }, `${fmtDate(r.date)} · ${RESULT_LABEL[r.result]}`, r.extra?.track && h('span', { class: 'muted' }, ` → ${TRACK_LABEL[r.extra.track]}`)),
+          h('span', { class: 'grow' }, `${fmtDate(r.date)} · ${RESULT_LABEL[r.result]}`, r.extra?.track && h('span', { class: 'muted' }, ` → ${TRACK_LABEL[r.extra.track]}`),
+            r.put?.length > 0 && h('span', { class: 'clip' }, ` 📎 풀이 ${r.put.length}개`)),
           h('button', { class: 'btn small danger', onclick: () => { f.pastReviews = f.pastReviews.filter((x) => x !== r); renderPast(); } }, '✕'))))
         : h('p', { class: 'muted' }, '종이로 이미 다시 풀어 본 적이 있으면 그 날짜와 결과를 넣어요.'),
       h('button', { class: 'btn', onclick: async () => {
@@ -755,6 +773,7 @@ function createProblemForm(existing, { onSaved, onCancel }) {
 
       const baseTrack = trackFor(reasonIds, lightIds());
       const reviews = isEdit ? existing.reviews || [] : f.pastReviews.map((r) => ({ date: r.date, result: r.result, ...r.extra }));
+      if (!isEdit) f.pastReviews.forEach((r) => putImgs.push(...(r.put || []))); // 지난 복습 때 풀이 사진
       const record = existing ? { ...existing } : { id: uid(), createdAt: Date.now() };
       Object.assign(record, {
         createdDate, baseTrack, ...replaySchedule(createdDate, baseTrack, reviews),
@@ -850,9 +869,9 @@ async function renderDetail(el, id) {
   if (!p) { fill(el, h('p', null, '오답을 찾을 수 없어요.')); return; }
   const probImg = await imageEl(p.images?.problem, bag);
 
-  async function saveHistory(reviews, delImgs = []) {
+  async function saveHistory(reviews, delImgs = [], putImgs = []) {
     const updated = { ...p, ...replaySchedule(p.createdDate, p.baseTrack, reviews) };
-    await db.saveProblem(updated, [], delImgs);
+    await db.saveProblem(updated, putImgs, delImgs);
     toast(updated.stage === GRADUATED ? '기록을 바꿨어요. 졸업 상태예요 🎓' : `기록을 바꿨어요. 다음 복습: ${fmtDate(updated.dueDate)}`);
     renderDetail(el, id);
   }
@@ -892,7 +911,7 @@ async function renderDetail(el, id) {
         : h('p', { class: 'muted' }, '아직 복습 기록이 없어요.'),
       h('button', { class: 'btn', style: { marginTop: '12px' }, onclick: async () => {
         const r = await reviewDialog({ title: '지난 복습 기록 추가', withDate: true, minDate: p.createdDate, maxDate: today() });
-        if (r) await saveHistory([...(p.reviews || []), { date: r.date, result: r.result, ...r.extra }]);
+        if (r) await saveHistory([...(p.reviews || []), { date: r.date, result: r.result, ...r.extra }], [], r.put);
       } }, '+ 지난 복습 기록 추가'),
       h('p', { class: 'hint' }, '종이로 다시 풀어 본 기록을 넣거나 잘못 누른 기록을 지우면, 복습 날짜가 자동으로 다시 계산돼요.')),
     h('div', { class: 'btn-row' },
