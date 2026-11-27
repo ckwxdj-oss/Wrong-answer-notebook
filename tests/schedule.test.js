@@ -2,112 +2,157 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  newSchedule, applyReview, reactivate, dailyQueue, overdueDays, GRADUATED,
+  newSchedule, applyReview, reactivate, dailyQueue, overdueDays, replaySchedule, trackFor, GRADUATED,
 } from '../js/schedule.js';
 
+const LIGHT = ['calc', 'time']; // 가벼운 실수: 계산 실수, 시간 부족
+
 let seq = 0;
-/** created 날짜에 등록한 문제 하나 만들기 */
-function make(created, extra = {}) {
+/** created 날짜에 등록한 문제 하나 만들기 (reasonIds로 코스 결정) */
+function make(created, reasonIds = ['concept'], extra = {}) {
   seq++;
-  return { id: 'p' + seq, createdAt: seq, createdDate: created, ...newSchedule(created), reviews: [], ...extra };
+  const baseTrack = trackFor(reasonIds, LIGHT);
+  return { id: 'p' + seq, createdAt: seq, createdDate: created, reasonIds, baseTrack, ...newSchedule(created, baseTrack), reviews: [], ...extra };
 }
 /** day에 복습 목록에 나오는지 */
 const shows = (p, day) => dailyQueue([p], day, 10).queue.some((q) => q.id === p.id);
+/** 여러 번 평가: [['2026-12-02','correct'], ...] */
+const run = (p, steps) => steps.reduce((acc, [d, r, extra]) => applyReview(acc, r, d, extra), p);
 
-test('1. 12/1 등록 → 12/4에 처음 복습이 나옴', () => {
-  const p = make('2026-12-01');
-  assert.equal(p.stage, 0);
-  assert.equal(p.dueDate, '2026-12-04');
-  assert.equal(shows(p, '2026-12-03'), false, '12/3에는 아직 안 나와야 함');
-  assert.equal(shows(p, '2026-12-04'), true, '12/4에 나와야 함');
+// ---------- 복습 코스 정하기 ----------
+test('코스: 가벼운 실수(계산 실수·시간 부족)만 골랐을 때만 짧은 복습', () => {
+  assert.equal(trackFor(['calc'], LIGHT), 'short');
+  assert.equal(trackFor(['calc', 'time'], LIGHT), 'short');
+  assert.equal(trackFor(['calc', 'concept'], LIGHT), 'normal', '섞이면 보통 복습');
+  assert.equal(trackFor(['missed'], LIGHT), 'normal');
+  assert.equal(trackFor([], LIGHT), 'normal');
 });
 
-test('2. 계속 맞음: 12/4 → 12/11 → 12/25 → 1/24 → 졸업', () => {
+// ---------- 보통 복습: 1 → 3 → 7 → 14 → 28 ----------
+test('1. 12/1 등록 → 다음 날 12/2에 처음 복습이 나옴', () => {
+  const p = make('2026-12-01');
+  assert.equal(p.track, 'normal');
+  assert.equal(p.dueDate, '2026-12-02');
+  assert.equal(shows(p, '2026-12-01'), false, '등록한 날에는 안 나옴');
+  assert.equal(shows(p, '2026-12-02'), true);
+});
+
+test('2. 보통 복습 계속 맞음: 12/2 → 12/5 → 12/12 → 12/26 → 1/23 → 졸업', () => {
   let p = make('2026-12-01');
-  p = applyReview(p, 'correct', '2026-12-04');
-  assert.equal(p.dueDate, '2026-12-11');
-  p = applyReview(p, 'correct', '2026-12-11');
-  assert.equal(p.dueDate, '2026-12-25');
-  p = applyReview(p, 'correct', '2026-12-25');
-  assert.equal(p.dueDate, '2027-01-24');
-  p = applyReview(p, 'correct', '2027-01-24');
+  const dues = [];
+  for (const d of ['2026-12-02', '2026-12-05', '2026-12-12', '2026-12-26']) {
+    p = applyReview(p, 'correct', d);
+    dues.push(p.dueDate);
+  }
+  assert.deepEqual(dues, ['2026-12-05', '2026-12-12', '2026-12-26', '2027-01-23']);
+  p = applyReview(p, 'correct', '2027-01-23');
   assert.equal(p.stage, GRADUATED);
-  assert.equal(p.dueDate, null);
-  assert.equal(shows(p, '2027-06-01'), false, '졸업하면 복습에 안 나옴');
-  assert.equal(p.reviews.length, 4, '복습 기록 4개');
-  assert.deepEqual(p.reviews.map((r) => r.date), ['2026-12-04', '2026-12-11', '2026-12-25', '2027-01-24']);
+  assert.equal(p.graduatedDate, '2027-01-23');
+  assert.equal(p.reviews.length, 5, '복습 기록 5개');
 });
 
 test('3. 14일 단계에서 애매함 → 7일 뒤, 그다음 맞음 → 다시 14일 간격', () => {
-  let p = make('2026-12-01');
-  p = applyReview(p, 'correct', '2026-12-04'); // → 7일 단계
-  p = applyReview(p, 'correct', '2026-12-11'); // → 14일 단계, 12/25
-  assert.equal(p.stage, 2);
-  p = applyReview(p, 'vague', '2026-12-25');
-  assert.equal(p.stage, 1);
-  assert.equal(p.dueDate, '2027-01-01', '7일 뒤');
-  p = applyReview(p, 'correct', '2027-01-01');
-  assert.equal(p.stage, 2);
-  assert.equal(p.dueDate, '2027-01-15', '다시 14일 간격');
+  let p = run(make('2026-12-01'), [['2026-12-02', 'correct'], ['2026-12-05', 'correct'], ['2026-12-12', 'correct']]);
+  assert.equal(p.dueDate, '2026-12-26', '14일 단계');
+  p = applyReview(p, 'vague', '2026-12-26');
+  assert.equal(p.dueDate, '2027-01-02', '7일 뒤');
+  p = applyReview(p, 'correct', '2027-01-02');
+  assert.equal(p.dueDate, '2027-01-16', '다시 14일 간격');
 });
 
-test('4. 3일 단계에서 애매함 → 3일 뒤 (3일 단계 그대로)', () => {
-  let p = make('2026-12-01');
-  p = applyReview(p, 'vague', '2026-12-04');
+test('4. 1일 단계에서 애매함 → 1일 뒤 (1일 단계 그대로)', () => {
+  const p = applyReview(make('2026-12-01'), 'vague', '2026-12-02');
   assert.equal(p.stage, 0);
-  assert.equal(p.dueDate, '2026-12-07');
+  assert.equal(p.dueDate, '2026-12-03');
 });
 
-test('5. 어느 단계든 틀림 → 3일 뒤, 3일 단계부터 다시', () => {
-  for (let stage = 0; stage <= 3; stage++) {
-    const p = applyReview(make('2026-12-01', { stage, dueDate: '2026-12-10' }), 'wrong', '2026-12-10');
-    assert.equal(p.stage, 0, `${stage}단계에서 틀림`);
-    assert.equal(p.dueDate, '2026-12-13');
-  }
+test('5. 틀림 → 이번에 틀린 이유로 코스를 다시 정해서 1일 뒤부터', () => {
+  const base = run(make('2026-12-01'), [['2026-12-02', 'correct'], ['2026-12-05', 'correct']]); // 보통 7일 단계
+  const heavy = applyReview(base, 'wrong', '2026-12-12', { track: 'normal', reasonIds: ['concept'] });
+  assert.deepEqual([heavy.track, heavy.stage, heavy.dueDate], ['normal', 0, '2026-12-13']);
+  const light = applyReview(base, 'wrong', '2026-12-12', { track: 'short', reasonIds: ['calc'] });
+  assert.deepEqual([light.track, light.stage, light.dueDate], ['short', 0, '2026-12-13'], '계산 실수만 → 짧은 복습으로');
 });
 
 test('6. 늦게 평가하면 평가한 날 기준으로 다음 날짜 계산', () => {
-  const p = make('2026-12-01'); // 원래 12/4
-  assert.equal(overdueDays(p, '2026-12-10'), 6, '6일 지남');
+  const p = make('2026-12-01'); // 원래 12/2
+  assert.equal(overdueDays(p, '2026-12-10'), 8, '8일 지남');
   assert.equal(shows(p, '2026-12-10'), true, '밀린 문제는 계속 남아 있음');
-  const c = applyReview(p, 'correct', '2026-12-10');
-  assert.equal(c.dueDate, '2026-12-17', '12/10 + 7일');
-  const v = applyReview(p, 'vague', '2026-12-10');
-  assert.equal(v.dueDate, '2026-12-13', '12/10 + 3일');
-  const w = applyReview(p, 'wrong', '2026-12-10');
-  assert.equal(w.dueDate, '2026-12-13', '12/10 + 3일');
+  assert.equal(applyReview(p, 'correct', '2026-12-10').dueDate, '2026-12-13', '12/10 + 3일');
+  assert.equal(applyReview(p, 'vague', '2026-12-10').dueDate, '2026-12-11', '12/10 + 1일');
 });
 
 test('7. 오늘 복습 15개, 최대 10개 → 가장 오래 밀린 10개만, 5개는 다음 날로', () => {
   const day = '2026-12-20';
-  // 등록일 12/1 ~ 12/15 → 복습일 12/4 ~ 12/18 (모두 오늘 이전), 순서를 섞어서 넣음
   const list = [];
-  for (let i = 1; i <= 15; i++) list.push(make(`2026-12-${String(i).padStart(2, '0')}`));
+  for (let i = 1; i <= 15; i++) list.push(make(`2026-12-${String(i).padStart(2, '0')}`)); // 복습일 12/2 ~ 12/16
   const shuffled = [...list].sort(() => Math.random() - 0.5);
-
   const { queue, deferred } = dailyQueue(shuffled, day, 10);
-  assert.equal(queue.length, 10);
-  assert.equal(deferred.length, 5);
   assert.deepEqual(queue.map((p) => p.id), list.slice(0, 10).map((p) => p.id), '가장 오래 밀린 10개');
   assert.deepEqual(deferred.map((p) => p.id), list.slice(10).map((p) => p.id));
-
-  // 10개를 오늘 모두 평가하면, 오늘은 더 안 나옴
   const after = shuffled.map((p) => (queue.some((q) => q.id === p.id) ? applyReview(p, 'correct', day) : p));
   assert.equal(dailyQueue(after, day, 10).queue.length, 0, '오늘 최대 개수를 다 채움');
-  // 다음 날에는 남은 5개가 나옴
   const next = dailyQueue(after, '2026-12-21', 10);
   assert.deepEqual(next.queue.map((p) => p.id).sort(), list.slice(10).map((p) => p.id).sort());
 });
 
-test('8. 졸업한 문제를 다시 복습에 넣으면 3일 단계부터', () => {
-  let p = make('2026-12-01');
-  for (const d of ['2026-12-04', '2026-12-11', '2026-12-25', '2027-01-24']) p = applyReview(p, 'correct', d);
+test('8. 졸업한 문제를 다시 복습에 넣으면 1일 단계부터', () => {
+  let p = run(make('2026-12-01'), [['2026-12-02', 'correct'], ['2026-12-05', 'correct'], ['2026-12-12', 'correct'], ['2026-12-26', 'correct'], ['2027-01-23', 'correct']]);
   assert.equal(p.stage, GRADUATED);
   p = reactivate(p, '2027-03-01');
-  assert.equal(p.stage, 0);
-  assert.equal(p.dueDate, '2027-03-04');
-  assert.equal(shows(p, '2027-03-03'), false);
-  assert.equal(shows(p, '2027-03-04'), true);
-  p = applyReview(p, 'correct', '2027-03-04');
-  assert.equal(p.dueDate, '2027-03-11', '그다음은 다시 7일 단계');
+  assert.deepEqual([p.stage, p.dueDate, p.graduatedDate], [0, '2027-03-02', null]);
+  p = applyReview(p, 'correct', '2027-03-02');
+  assert.equal(p.dueDate, '2027-03-05', '그다음은 3일 단계');
+});
+
+// ---------- 짧은 복습: 1 → 3 → 7 ----------
+test('9. 짧은 복습: 11/10 계산 실수 → 11/11 → 11/14 → 11/21 → 졸업 (3번)', () => {
+  let p = make('2026-11-10', ['calc']);
+  assert.deepEqual([p.track, p.dueDate], ['short', '2026-11-11']);
+  p = applyReview(p, 'correct', '2026-11-11');
+  assert.equal(p.dueDate, '2026-11-14');
+  p = applyReview(p, 'correct', '2026-11-14');
+  assert.equal(p.dueDate, '2026-11-21');
+  p = applyReview(p, 'correct', '2026-11-21');
+  assert.equal(p.stage, GRADUATED);
+});
+
+test('10. 짧은 복습 중 틀림: 또 가벼운 실수면 짧은 복습 1일부터, 개념 문제면 보통 복습(28일까지)으로', () => {
+  const p = run(make('2026-11-10', ['calc', 'time']), [['2026-11-11', 'correct']]);
+  const again = applyReview(p, 'wrong', '2026-11-14', { track: 'short', reasonIds: ['calc'] });
+  assert.deepEqual([again.track, again.dueDate], ['short', '2026-11-15']);
+  let moved = applyReview(p, 'wrong', '2026-11-14', { track: 'normal', reasonIds: ['concept'] });
+  assert.deepEqual([moved.track, moved.dueDate], ['normal', '2026-11-15']);
+  moved = run(moved, [['2026-11-15', 'correct'], ['2026-11-18', 'correct'], ['2026-11-25', 'correct'], ['2026-12-09', 'correct']]);
+  assert.equal(moved.dueDate, '2027-01-06', '보통 복습이라 28일 단계까지 감');
+});
+
+test('11. 짧은 복습 7일 단계에서 애매함 → 3일 뒤', () => {
+  const p = run(make('2026-11-10', ['calc']), [['2026-11-11', 'correct'], ['2026-11-14', 'correct'], ['2026-11-21', 'vague']]);
+  assert.deepEqual([p.stage, p.dueDate], [1, '2026-11-24']);
+});
+
+// ---------- 지난 날짜로 등록 / 지난 복습 기록 ----------
+test('12. 오늘(11/27) 11/10에 틀린 문제 등록 → 11/11이 복습일이라 이미 16일 지남', () => {
+  const p = make('2026-11-10');
+  assert.equal(p.dueDate, '2026-11-11');
+  assert.equal(overdueDays(p, '2026-11-27'), 16);
+  assert.equal(shows(p, '2026-11-27'), true);
+});
+
+test('13. 종이로 했던 지난 복습 기록 넣기: 순서 섞어 넣어도 날짜순으로 다시 계산', () => {
+  let p = make('2026-11-10', ['concept']);
+  p = applyReview(p, 'correct', '2026-11-14'); // 나중 기록을 먼저 넣음
+  p = applyReview(p, 'correct', '2026-11-11');
+  assert.deepEqual(p.reviews.map((r) => r.date), ['2026-11-11', '2026-11-14'], '날짜순 정렬');
+  assert.deepEqual(p.reviews.map((r) => r.stage), [0, 1], '그때 단계도 다시 계산');
+  assert.equal(p.dueDate, '2026-11-21', '11/14 + 7일');
+});
+
+test('14. 기록을 지우거나 틀린 날짜를 바꾸면 일정도 다시 계산', () => {
+  const p = run(make('2026-11-10'), [['2026-11-11', 'correct'], ['2026-11-14', 'correct']]);
+  const removed = replaySchedule(p.createdDate, p.baseTrack, p.reviews.slice(0, 1));
+  assert.equal(removed.dueDate, '2026-11-14', '두 번째 기록을 지우면 3일 단계로');
+  const moved = replaySchedule('2026-11-05', p.baseTrack, []);
+  assert.equal(moved.dueDate, '2026-11-06', '날짜를 11/5로 바꾸면 11/6');
 });

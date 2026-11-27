@@ -1,6 +1,6 @@
 // 서비스 워커: 앱 파일을 기기에 저장해 두고 인터넷 없이도 열리게 해요.
 // 앱을 고칠 때마다 VERSION 숫자를 올리면, 다음에 열 때 "새 버전" 알림이 떠요.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = 'wrongnote-' + VERSION;
 const FILES = [
   './',

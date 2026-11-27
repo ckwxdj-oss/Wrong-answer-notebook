@@ -105,7 +105,7 @@ export function saveProblem(problem, putImages = [], delImageIds = []) {
 /** 오답 삭제 (연결된 사진도 함께) */
 export function deleteProblem(problem) {
   return run(['problems', 'images'], 'readwrite', (s) => {
-    Object.values(problem.images || {}).forEach((id) => id && s.images.delete(id));
+    Object.values(problem.images || {}).flat().forEach((id) => id && s.images.delete(id));
     s.problems.delete(problem.id);
   });
 }
@@ -131,11 +131,11 @@ export const DEFAULT_SUBJECTS = [
 ];
 
 export const DEFAULT_REASONS = [
-  { id: 'calc', name: '계산 실수', order: 0 },
-  { id: 'concept', name: '개념 부족', order: 1 },
-  { id: 'missed', name: '조건 놓침', order: 2, needsDetail: true, detailLabel: '어떤 조건을 놓쳤나요? (예: x>0, 정수 조건)' },
-  { id: 'direction', name: '풀이 방향 못 잡음', order: 3 },
-  { id: 'time', name: '시간 부족', order: 4 },
+  { id: 'calc', name: '계산 실수', order: 0, light: true },
+  { id: 'concept', name: '개념 부족', order: 1, light: false },
+  { id: 'missed', name: '조건 놓침', order: 2, light: false, needsDetail: true, detailLabel: '어떤 조건을 놓쳤나요? (예: x>0, 정수 조건)' },
+  { id: 'direction', name: '풀이 방향 못 잡음', order: 3, light: false },
+  { id: 'time', name: '시간 부족', order: 4, light: true },
 ];
 
 async function seedIfEmpty() {

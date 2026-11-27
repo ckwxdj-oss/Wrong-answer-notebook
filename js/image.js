@@ -5,12 +5,13 @@ export const MAX_SIDE = 1600;   // 저장할 사진의 긴 쪽 최대 크기(px)
 export const QUALITY = 0.8;     // JPEG 품질 (0~1)
 export const THUMB_SIDE = 360;  // 목록용 미리보기 크기
 
-/** 카메라(capture=true) 또는 갤러리에서 사진 파일 하나 고르기 */
-export function pickFile(capture) {
+/** 카메라(capture=true) 또는 갤러리에서 사진 고르기. multiple이면 여러 장(배열)을 돌려줌 */
+export function pickFile(capture, multiple = false) {
   return new Promise((resolve) => {
     const inp = h('input', { type: 'file', accept: 'image/*' });
     if (capture) inp.setAttribute('capture', 'environment');
-    inp.addEventListener('change', () => resolve(inp.files[0] || null));
+    if (multiple) inp.multiple = true;
+    inp.addEventListener('change', () => resolve(multiple ? [...inp.files] : inp.files[0] || null));
     inp.addEventListener('cancel', () => resolve(null));
     inp.click();
   });
