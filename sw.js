@@ -4,7 +4,7 @@
 //
 // ⚠️ 이 파일은 일부러 import를 쓰지 않아요(예전 버전 앱이 업데이트를 받을 수 있도록).
 //    아래 날짜 계산 함수는 js/schedule.js와 같은 내용이에요. 그쪽을 고치면 여기도 같이 고쳐요.
-const VERSION = 'v7';
+const VERSION = 'v8';
 
 const pad = (n) => String(n).padStart(2, '0');
 const toDateStr = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;

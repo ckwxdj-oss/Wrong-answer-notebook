@@ -69,6 +69,15 @@ function unitName(subject, unitId) {
   if (!u) return '단원 없음';
   return u.group ? `${u.group} › ${u.name}` : u.name;
 }
+/** 오답 제목 부분: 제목이 있으면 크게 + 아래에 "과목 · 단원", 없으면 "과목 · 단원"만 */
+function titleBlock(p, big = false) {
+  const cls = 'item-title' + (big ? ' big' : '');
+  if (!p.title) return h('div', { class: cls }, p.starred && '⭐ ', problemLabel(p));
+  return h('div', { class: 'title-block' },
+    h('div', { class: cls }, p.starred && '⭐ ', p.title),
+    h('div', { class: 'title-sub' }, problemLabel(p)));
+}
+
 function problemLabel(p) {
   const s = subjectById(p.subjectId);
   return `${s ? s.name : '(삭제된 과목)'} · ${unitName(s, p.unitId)}`;
@@ -325,7 +334,7 @@ async function renderReview(el) {
       h('span', null, `남은 문제 ${queue.length}개`),
       od > 0 && h('span', { class: 'badge late' }, `${od}일 지남`)),
     h('div', { class: 'card' },
-      h('div', { class: 'item-title big' }, p.starred && '⭐ ', problemLabel(p)),
+      titleBlock(p, true),
       h('div', { class: 'meta' }, statusBadge(p)),
       probImg,
       h('p', { class: 'hint' }, '종이에 다시 풀어본 다음 "풀이 보기"를 눌러요.')),
@@ -683,6 +692,9 @@ function createProblemForm(existing, { onSaved, onCancel }) {
       detailInputs);
   }
 
+  // ----- 제목 -----
+  const titleInput = h('input', { type: 'text', class: 'title-input', maxlength: 60, placeholder: '예: 삼각함수 최댓값 — 범위 확인 (안 적어도 돼요)', value: existing?.title || '' });
+
   // ----- 틀린 날짜 -----
   const dateInput = h('input', { type: 'date', class: 'date-input', value: existing?.createdDate || today(), max: today() });
   const dateHint = h('span', { class: 'hint' });
@@ -780,6 +792,7 @@ function createProblemForm(existing, { onSaved, onCancel }) {
         subjectId, unitId, reasonIds, reasonDetails, images, thumb,
         myAnswer: myAnswer.value.trim(), answerBasis: answerBasis.value.trim(),
         source: { book: book.value.trim(), page: page.value.trim(), num: num.value.trim() },
+        title: titleInput.value.trim(),
         memo: memo.value.trim(), starred: f.starred, updatedAt: Date.now(),
       });
       await db.saveProblem(record, putImgs, delImgs);
@@ -801,6 +814,7 @@ function createProblemForm(existing, { onSaved, onCancel }) {
   const el = h('div', { class: 'form' },
     h('div', { class: 'card' },
       h('div', { class: 'date-row' }, h('h2', null, '📅 틀린 날짜'), dateInput, dateHint),
+      h('label', { class: 'title-row' }, h('h2', null, '✏️ 제목 (선택)'), titleInput),
       h('h2', null, '과목 · 단원'), subjectChips, unitBox),
     h('div', { class: 'card' },
       h('h2', null, '1. 문제 사진'), photoBox),
@@ -823,7 +837,15 @@ function createProblemForm(existing, { onSaved, onCancel }) {
 }
 
 // ---------- 오답 목록 ----------
-const filter = { subjectId: '', unitId: '', reasonId: '', status: '', starred: false };
+const filter = { subjectId: '', unitId: '', reasonId: '', status: '', starred: false, q: '' };
+
+/** 검색어가 제목·과목·단원·메모·교재 이름에 들어 있는지 */
+function matchesSearch(p, q) {
+  if (!q) return true;
+  const norm = (t) => (t || '').toLowerCase().replace(/\s+/g, '');
+  const text = norm([p.title, problemLabel(p), p.memo, p.source?.book].join(' '));
+  return norm(q).split(',').every((w) => !w || text.includes(w));
+}
 
 async function renderList(el) {
   const bag = bagFor('list');
@@ -841,25 +863,35 @@ async function renderList(el) {
     sel(filter.status, [['', '복습 중 + 졸업'], ['active', '복습 중만'], ['grad', '졸업만']], (v) => { filter.status = v; }),
     h('button', { class: 'chip' + (filter.starred ? ' on' : ''), onclick: () => { filter.starred = !filter.starred; renderList(el); } }, '⭐ 중요만'));
 
+  const search = h('input', {
+    type: 'search', class: 'search-input', placeholder: '🔍 제목, 단원, 메모, 교재로 찾기', value: filter.q,
+    oninput: (e) => { filter.q = e.target.value; renderResults(); },
+  });
+  const results = h('div');
+  fill(el, h('div', { class: 'search-row' }, search), filters, results);
+  renderResults();
+
+  function renderResults() {
   const shown = all.filter((p) =>
     (!filter.subjectId || p.subjectId === filter.subjectId)
     && (!filter.unitId || p.unitId === filter.unitId)
     && (!filter.reasonId || (p.reasonIds || []).includes(filter.reasonId))
     && (!filter.status || (filter.status === 'grad') === (p.stage === GRADUATED))
-    && (!filter.starred || p.starred));
+    && (!filter.starred || p.starred)
+    && matchesSearch(p, filter.q.trim()));
 
-  fill(el, 
-    filters,
+  fill(results,
     h('p', { class: 'hint' }, `${shown.length}개 / 전체 ${all.length}개`),
     shown.length
       ? h('div', { class: 'grid' }, shown.map((p) => h('button', { class: 'item', onclick: () => go('detail/' + p.id) },
         p.thumb ? h('img', { src: bag.url(p.thumb), alt: '', loading: 'lazy' }) : h('div', { class: 'noimg' }, '사진 없음'),
         h('div', { class: 'item-body' },
-          h('div', { class: 'item-title' }, p.starred && '⭐ ', problemLabel(p)),
+          titleBlock(p),
           h('div', null, reasonTags(p)),
           h('div', { class: 'item-foot' }, statusBadge(p), dueBadge(p))))))
       : h('div', { class: 'empty' }, all.length ? '조건에 맞는 오답이 없어요.' : '아직 등록한 오답이 없어요.', h('br'),
         !all.length && h('button', { class: 'btn primary', onclick: () => go('add') }, '➕ 첫 오답 등록하기')));
+  }
 }
 
 // ---------- 오답 상세 ----------
@@ -885,7 +917,7 @@ async function renderDetail(el, id) {
 
   fill(el,
     h('div', { class: 'card' },
-      h('div', { class: 'item-title big' }, p.starred && '⭐ ', problemLabel(p)),
+      titleBlock(p, true),
       h('div', { class: 'meta' }, statusBadge(p), dueBadge(p),
         p.stage !== GRADUATED && h('span', null, `다음 복습: ${fmtDate(p.dueDate)}`),
         p.graduatedDate && h('span', null, `졸업: ${fmtDate(p.graduatedDate)}`),
@@ -1084,7 +1116,8 @@ async function gradItem(p, bag) {
     },
   }, '👀 풀이 보기');
   const wrap = h('div', { class: 'grad-item' },
-    h('div', { class: 'item-title' }, p.starred && '⭐ ', reasonTags(p),
+    p.title && h('div', { class: 'item-title' }, p.title),
+    h('div', { class: 'item-title' }, !p.title && p.starred && '⭐ ', reasonTags(p),
       p.graduatedDate && h('span', { class: 'muted' }, ` 졸업 ${fmtDate(p.graduatedDate)}`)),
     img,
     h('div', { class: 'btn-row' },
