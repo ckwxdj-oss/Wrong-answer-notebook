@@ -156,3 +156,23 @@ test('14. 기록을 지우거나 틀린 날짜를 바꾸면 일정도 다시 계
   const moved = replaySchedule('2026-11-05', p.baseTrack, []);
   assert.equal(moved.dueDate, '2026-11-06', '날짜를 11/5로 바꾸면 11/6');
 });
+
+// 서비스 워커(sw.js)에 따로 적어 둔 "오늘 복습 목록" 계산이 js/schedule.js와 똑같은지
+test('알림용 계산(sw.js)이 앱의 계산과 같음', async () => {
+  const fs = await import('node:fs');
+  const vm = await import('node:vm');
+  const code = fs.readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
+  assert.ok(!/^\s*import\s/m.test(code), 'sw.js에는 import가 없어야 예전 앱도 업데이트를 받아요');
+  const listeners = {};
+  const sandbox = { self: { addEventListener: (t, f) => { listeners[t] = f; } }, location: { origin: 'x' }, console };
+  vm.runInNewContext(code + '\nself.__dq = dailyQueue; self.__od = overdueDays;', sandbox);
+  const list = [];
+  for (let i = 1; i <= 15; i++) list.push(make(`2026-12-${String(i).padStart(2, '0')}`));
+  list[3] = applyReview(list[3], 'correct', '2026-12-20');
+  for (const day of ['2026-12-10', '2026-12-20', '2026-12-25']) {
+    const a = dailyQueue(list, day, 10); const b = sandbox.self.__dq(list, day, 10);
+    assert.deepEqual(b.queue.map((p) => p.id), a.queue.map((p) => p.id), day);
+    assert.deepEqual(b.queue.map((p) => sandbox.self.__od(p, day)), a.queue.map((p) => overdueDays(p, day)));
+  }
+  assert.ok(listeners.periodicsync && listeners.notificationclick, '알림 이벤트가 연결됨');
+});

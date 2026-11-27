@@ -1305,7 +1305,7 @@ let updating = false;
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  navigator.serviceWorker.register('./sw.js', { type: 'module' }).then((reg) => {
+  navigator.serviceWorker.register('./sw.js').then((reg) => {
     const offer = (worker) => {
       const bar = h('div', { class: 'update-bar' }, '새 버전이 준비됐어요.',
         h('button', { class: 'btn small', onclick: () => { updating = true; worker.postMessage('SKIP_WAITING'); } }, '지금 업데이트'));

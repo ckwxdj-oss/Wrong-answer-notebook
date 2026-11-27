@@ -1,9 +1,31 @@
 // 서비스 워커: 앱 파일을 기기에 저장해 두고 인터넷 없이도 열리게 해요.
 // 또, 앱을 열지 않아도 하루에 한 번쯤 복습할 게 있는지 확인해서 알림을 보내요.
 // 앱을 고칠 때마다 VERSION 숫자를 올리면, 다음에 열 때 "새 버전" 알림이 떠요.
-import { dailyQueue, overdueDays, toDateStr } from './js/schedule.js';
+//
+// ⚠️ 이 파일은 일부러 import를 쓰지 않아요(예전 버전 앱이 업데이트를 받을 수 있도록).
+//    아래 날짜 계산 함수는 js/schedule.js와 같은 내용이에요. 그쪽을 고치면 여기도 같이 고쳐요.
+const VERSION = 'v5';
 
-const VERSION = 'v4';
+const pad = (n) => String(n).padStart(2, '0');
+const toDateStr = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+function diffDays(from, to) {
+  const [y1, m1, d1] = from.split('-').map(Number);
+  const [y2, m2, d2] = to.split('-').map(Number);
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
+}
+const RESULTS = ['correct', 'vague', 'wrong'];
+const isDue = (p, today) => p.stage !== 'graduated' && !!p.dueDate && p.dueDate <= today;
+const overdueDays = (p, today) => (p.stage === 'graduated' || !p.dueDate ? 0 : Math.max(0, diffDays(p.dueDate, today)));
+function dailyQueue(problems, today, max) {
+  const due = problems.filter((p) => isDue(p, today)).sort((a, b) => {
+    if (a.dueDate !== b.dueDate) return a.dueDate < b.dueDate ? -1 : 1;
+    return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+  });
+  let doneToday = 0;
+  problems.forEach((p) => (p.reviews || []).forEach((r) => { if (r.date === today && RESULTS.includes(r.result)) doneToday++; }));
+  const remaining = Math.max(0, max - doneToday);
+  return { queue: due.slice(0, remaining), deferred: due.slice(remaining), doneToday };
+}
 const CACHE = 'wrongnote-' + VERSION;
 const FILES = [
   './',
