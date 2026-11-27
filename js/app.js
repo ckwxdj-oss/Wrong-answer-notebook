@@ -1097,6 +1097,7 @@ async function renderSettings(el) {
       est && h('p', { class: 'muted' }, `사용 중: ${mb(est.usage)} / 사용 가능: 약 ${mb(est.quota)}`)),
     reviewSettingsCard(el),
     await backupCard(el),
+    await notifyCard(el),
     installCard(),
     testModeCard(el));
 }
@@ -1192,6 +1193,98 @@ async function backupCard(el) {
     state.testMode && h('p', { class: 'hint' }, '⚠️ 지금은 테스트 모드라서 테스트 데이터를 백업/불러오기 해요.'));
 }
 
+// ---------- 복습 알림 ----------
+const NOTIFY_TAG = 'daily-review';
+
+async function swReg() {
+  if (!('serviceWorker' in navigator)) return null;
+  return navigator.serviceWorker.ready;
+}
+
+/** 크롬에게 "하루에 한 번쯤 깨워줘" 부탁하기. 결과: 'ok' | 'need-install' | 'unsupported' */
+async function registerPeriodic() {
+  const reg = await swReg();
+  if (!reg || !('periodicSync' in reg)) return 'unsupported';
+  try {
+    const st = await navigator.permissions.query({ name: 'periodic-background-sync' });
+    if (st.state !== 'granted') return 'need-install';
+    await reg.periodicSync.register(NOTIFY_TAG, { minInterval: 12 * 60 * 60 * 1000 });
+    return 'ok';
+  } catch {
+    return 'need-install';
+  }
+}
+
+async function notifyCard(el) {
+  const supported = 'Notification' in window && 'serviceWorker' in navigator;
+  const on = await db.getMainSetting('notifyOn', false);
+  const perm = supported ? Notification.permission : 'unsupported';
+  const bg = on && perm === 'granted' ? await registerPeriodic() : null;
+  const rerender = () => renderSettings(el);
+
+  async function turnOn() {
+    const p = await Notification.requestPermission();
+    if (p !== 'granted') {
+      alert('알림이 허용되지 않았어요.\n크롬 주소창 왼쪽 아이콘(또는 ⋮ → 설정 → 사이트 설정 → 알림)에서 이 사이트의 알림을 "허용"으로 바꾼 다음 다시 눌러 주세요.');
+      rerender();
+      return;
+    }
+    await db.setMainSetting('notifyOn', true);
+    const r = await registerPeriodic();
+    toast(r === 'ok' ? '🔔 복습 알림을 켰어요' : '🔔 알림을 켰어요. 앱을 홈 화면에 설치해야 자동으로 와요');
+    rerender();
+  }
+  async function turnOff() {
+    await db.setMainSetting('notifyOn', false);
+    const reg = await swReg();
+    try { await reg?.periodicSync?.unregister(NOTIFY_TAG); } catch { /* 없으면 그만 */ }
+    toast('🔕 복습 알림을 껐어요');
+    rerender();
+  }
+  async function testNotify() {
+    if (Notification.permission !== 'granted') { await turnOn(); if (Notification.permission !== 'granted') return; }
+    const reg = await swReg();
+    reg?.active?.postMessage('TEST_NOTIFY');
+    toast('테스트 알림을 보냈어요. 화면 위쪽 알림을 확인해요');
+  }
+
+  const bgText = {
+    ok: '✓ 앱을 열지 않아도 확인해요',
+    'need-install': '⚠️ 앱을 홈 화면에 설치해야 자동으로 확인할 수 있어요 (아래 "홈 화면에 추가")',
+    unsupported: '⚠️ 이 브라우저는 자동 확인을 지원하지 않아요. 크롬에서 설치한 앱으로 써 주세요',
+  }[bg];
+
+  return h('div', { class: 'card' },
+    h('h2', null, '🔔 복습 알림'),
+    !supported
+      ? h('p', null, '이 브라우저는 알림을 지원하지 않아요.')
+      : [
+        h('p', null, on && perm === 'granted' ? '켜져 있어요.' : '꺼져 있어요.'),
+        perm === 'denied' && h('p', { class: 'help-warn' }, '⚠️ 크롬에서 이 사이트 알림이 차단돼 있어요. 크롬 ⋮ → 설정 → 사이트 설정 → 알림에서 허용으로 바꿔 주세요.'),
+        on && perm === 'granted' && bgText && h('p', { class: bg === 'ok' ? 'muted' : 'help-warn' }, bgText),
+        h('div', { class: 'btn-row' },
+          on && perm === 'granted'
+            ? h('button', { class: 'btn', onclick: turnOff }, '🔕 알림 끄기')
+            : h('button', { class: 'btn primary', onclick: turnOn }, '🔔 알림 켜기'),
+          h('button', { class: 'btn', onclick: testNotify }, '테스트 알림 보내기')),
+        h('p', { class: 'hint' }, `복습할 오답이 있는 날, 하루 한 번 아침 ${7}시 ~ 밤 ${10}시 사이에 알려줘요. 정확한 시각은 크롬이 정해서 조금 늦을 수 있어요.`),
+      ]);
+}
+
+/** 앱을 열 때: 알림 예약을 다시 확인하고, 이미 떠 있는 복습 알림은 닫기 */
+async function setupNotifications() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type === 'go') go(e.data.path);
+    if (e.data?.type === 'notify-result' && !e.data.sent && e.data.reason !== 'none') console.warn('알림 실패', e.data.reason);
+  });
+  try {
+    if (await db.getMainSetting('notifyOn', false) && Notification.permission === 'granted') await registerPeriodic();
+    const reg = await swReg();
+    (await reg?.getNotifications({ tag: NOTIFY_TAG }))?.forEach((n) => n.close());
+  } catch (err) { console.warn(err); }
+}
+
 // ---------- 앱 설치 (PWA) ----------
 let installEvent = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; });
@@ -1212,7 +1305,7 @@ let updating = false;
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  navigator.serviceWorker.register('./sw.js').then((reg) => {
+  navigator.serviceWorker.register('./sw.js', { type: 'module' }).then((reg) => {
     const offer = (worker) => {
       const bar = h('div', { class: 'update-bar' }, '새 버전이 준비됐어요.',
         h('button', { class: 'btn small', onclick: () => { updating = true; worker.postMessage('SKIP_WAITING'); } }, '지금 업데이트'));
@@ -1369,6 +1462,7 @@ async function start() {
     await loadMeta();
     updateTestBar();
     registerServiceWorker();
+    setupNotifications();
     document.querySelectorAll('#tabbar button').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
     $('#helpBtn').addEventListener('click', () => go('help'));
     window.addEventListener('hashchange', route);

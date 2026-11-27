@@ -7,7 +7,7 @@
 import * as db from './db.js';
 
 export const FORMAT = 'wrongnote-backup';
-const SKIP_SETTINGS = ['testMode', 'testToday']; // 기기마다 다른 설정은 백업하지 않음
+const SKIP_SETTINGS = ['testMode', 'testToday', 'notifyOn', 'lastNotified']; // 기기마다 다른 설정은 백업하지 않음
 
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {

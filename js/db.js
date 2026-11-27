@@ -44,6 +44,24 @@ export async function use(name = MAIN_DB) {
 
 export function currentDbName() { return currentName; }
 
+/** 테스트 모드여도 "진짜" 데이터베이스의 설정을 읽고 쓰기 (알림 켜기 같은 기기 설정용) */
+async function withMain(fn) {
+  if (currentName === MAIN_DB) return fn(current);
+  const d = await openDB(MAIN_DB);
+  try { return await fn(d); } finally { d.close(); }
+}
+export const getMainSetting = (key, fallback) => withMain((d) => new Promise((resolve) => {
+  const q = d.transaction('settings').objectStore('settings').get(key);
+  q.onsuccess = () => resolve(q.result === undefined ? fallback : q.result.value);
+  q.onerror = () => resolve(fallback);
+}));
+export const setMainSetting = (key, value) => withMain((d) => new Promise((resolve, reject) => {
+  const t = d.transaction('settings', 'readwrite');
+  t.objectStore('settings').put({ key, value });
+  t.oncomplete = resolve;
+  t.onerror = () => reject(t.error);
+}));
+
 /** 데이터베이스를 통째로 지우기 (테스트 데이터 초기화 등) */
 export async function resetDb(name) {
   if (current && currentName === name) { current.close(); current = null; currentName = null; }
